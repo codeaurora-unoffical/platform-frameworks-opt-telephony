@@ -110,7 +110,7 @@ public class UiccCardApplicationTest extends TelephonyTest {
 
     @After
     public void tearDown() throws Exception {
-        mTestHandlerThread.quitSafely();
+        mTestHandlerThread.quit();
         super.tearDown();
     }
 
@@ -160,6 +160,28 @@ public class UiccCardApplicationTest extends TelephonyTest {
                 mFDNenabled);
         waitUntilReady();
         assertTrue(mUiccCardApplication.getIccFdnEnabled());
+    }
+
+    @Test
+    @SmallTest
+    public void testCheckIsPersoLocked() {
+        mUiccCardAppStatus.app_state = IccCardApplicationStatus.AppState
+               .APPSTATE_SUBSCRIPTION_PERSO;
+        mUiccCardAppStatus.perso_substate = IccCardApplicationStatus.PersoSubState
+                .PERSOSUBSTATE_SIM_NETWORK;
+        Message mCardAppUpdate = mHandler.obtainMessage(UICCCARDAPP_UPDATE_EVENT);
+        setReady(false);
+        mCardAppUpdate.sendToTarget();
+        waitUntilReady();
+        assertTrue(mUiccCardApplication.isPersoLocked());
+
+        mUiccCardAppStatus.perso_substate = IccCardApplicationStatus.PersoSubState
+                .PERSOSUBSTATE_READY;
+        setReady(false);
+        mCardAppUpdate = mHandler.obtainMessage(UICCCARDAPP_UPDATE_EVENT);
+        mCardAppUpdate.sendToTarget();
+        waitUntilReady();
+        assertFalse(mUiccCardApplication.isPersoLocked());
     }
 
     @Test

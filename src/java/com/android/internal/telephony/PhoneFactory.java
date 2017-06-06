@@ -43,6 +43,7 @@ import com.android.internal.telephony.sip.SipPhone;
 import com.android.internal.telephony.sip.SipPhoneFactory;
 import com.android.internal.telephony.uicc.IccCardProxy;
 import com.android.internal.telephony.uicc.UiccController;
+import com.android.internal.telephony.util.NotificationChannelController;
 import com.android.internal.util.IndentingPrintWriter;
 
 import java.io.FileDescriptor;
@@ -80,6 +81,7 @@ public class PhoneFactory {
     static private SubscriptionMonitor sSubscriptionMonitor;
     static private TelephonyNetworkFactory[] sTelephonyNetworkFactories;
     static private ImsResolver sImsResolver;
+    static private NotificationChannelController sNotificationChannelController;
 
     static private final HashMap<String, LocalLog>sLocalLogs = new HashMap<String, LocalLog>();
 
@@ -158,8 +160,8 @@ public class PhoneFactory {
                     networkModes[i] = RILConstants.PREFERRED_NETWORK_MODE;
 
                     Rlog.i(LOG_TAG, "Network Mode set to " + Integer.toString(networkModes[i]));
-                    sCommandsInterfaces[i] = new RIL(context, networkModes[i],
-                            cdmaSubscription, i);
+                    sCommandsInterfaces[i] = telephonyComponentFactory.makeRIL(context,
+                            networkModes[i], cdmaSubscription, i);
                 }
                 Rlog.i(LOG_TAG, "Creating SubscriptionController");
                 telephonyComponentFactory.initSubscriptionController(
@@ -234,6 +236,8 @@ public class PhoneFactory {
 
                 sProxyController = ProxyController.getInstance(context, sPhones,
                         sUiccController, sCommandsInterfaces, sPhoneSwitcher);
+
+                sNotificationChannelController = new NotificationChannelController(context);
 
                 sTelephonyNetworkFactories = new TelephonyNetworkFactory[numPhones];
                 for (int i = 0; i < numPhones; i++) {

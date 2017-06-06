@@ -150,6 +150,12 @@ public class SimulatedCommands extends BaseCommands
         mPin2Code = DEFAULT_SIM_PIN2_CODE;
     }
 
+    public void dispose() {
+        if (mHandlerThread != null) {
+            mHandlerThread.quit();
+        }
+    }
+
     private void log(String str) {
         Rlog.d(LOG_TAG, str);
     }
@@ -2114,5 +2120,16 @@ public class SimulatedCommands extends BaseCommands
             mRestrictedStateRegistrant.notifyRegistrant(
                     new AsyncResult(null, restrictedState, null));
         }
+    }
+
+    @Override
+    public void setOnRestrictedStateChanged(Handler h, int what, Object obj) {
+        super.setOnRestrictedStateChanged(h, what, obj);
+        SimulatedCommandsVerifier.getInstance().setOnRestrictedStateChanged(h, what, obj);
+    }
+
+   @Override
+    public void getAtr(Message response) {
+        unimplemented(response);
     }
 }

@@ -38,7 +38,6 @@ import android.os.PowerManager.WakeLock;
 import android.os.SystemProperties;
 import android.os.UserHandle;
 
-import android.provider.Telephony;
 import android.telecom.VideoProfile;
 import android.telephony.CarrierConfigManager;
 import android.telephony.PhoneNumberUtils;
@@ -55,7 +54,6 @@ import com.android.ims.ImsEcbm;
 import com.android.ims.ImsEcbmStateListener;
 import com.android.ims.ImsException;
 import com.android.ims.ImsManager;
-import com.android.ims.ImsMultiEndpoint;
 import com.android.ims.ImsReasonInfo;
 import com.android.ims.ImsSsInfo;
 import com.android.ims.ImsUtInterface;
@@ -79,6 +77,8 @@ import static com.android.internal.telephony.CommandsInterface.CF_REASON_NO_REPL
 import static com.android.internal.telephony.CommandsInterface.CF_REASON_NOT_REACHABLE;
 import static com.android.internal.telephony.CommandsInterface.CF_REASON_BUSY;
 import static com.android.internal.telephony.CommandsInterface.CF_REASON_UNCONDITIONAL;
+import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_DATA_SYNC;
+import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_PACKET;
 import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_VOICE;
 import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_NONE;
 
@@ -101,7 +101,7 @@ import com.android.internal.telephony.TelephonyProperties;
 import com.android.internal.telephony.UUSInfo;
 import com.android.internal.telephony.gsm.SuppServiceNotification;
 import com.android.internal.telephony.uicc.IccRecords;
-import com.android.internal.telephony.util.TelephonyNotificationBuilder;
+import com.android.internal.telephony.util.NotificationChannelController;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -139,9 +139,6 @@ public class ImsPhone extends ImsPhoneBase {
     ImsPhoneCallTracker mCT;
     ImsExternalCallTracker mExternalCallTracker;
     private ArrayList <ImsPhoneMmiCode> mPendingMMIs = new ArrayList<ImsPhoneMmiCode>();
-    private final Deque<ImsPhoneMmiCode> mMMIQueue =
-            new ArrayDeque<ImsPhoneMmiCode>(USSD_MAX_QUEUE);
-
     private ServiceState mSS = new ServiceState();
 
     // To redial silently through GSM or CDMA when dialing through IMS fails
@@ -274,6 +271,13 @@ public class ImsPhone extends ImsPhoneBase {
         return mCT;
     }
 
+    public void setVoiceCallForwardingFlag(int line, boolean enable, String number) {
+        IccRecords r = getIccRecords();
+        if (r != null) {
+            setVoiceCallForwardingFlag(r, line, enable, number);
+        }
+    }
+
     public ImsExternalCallTracker getExternalCallTracker() {
         return mExternalCallTracker;
     }
@@ -375,10 +379,6 @@ public class ImsPhone extends ImsPhoneBase {
         return true;
     }
 
-    private synchronized boolean isMmiQueueFull() {
-        return (mMMIQueue.size() >= USSD_MAX_QUEUE - 1);
-    }
-
     private void sendUssdResponse(String ussdRequest, CharSequence message, int returnCode,
                                    ResultReceiver wrappedCallback) {
         UssdResponse response = new UssdResponse(ussdRequest, message);
@@ -389,17 +389,29 @@ public class ImsPhone extends ImsPhoneBase {
     }
 
     @Override
-    public boolean handleUssdRequest(String ussdRequest, ResultReceiver wrappedCallback) {
-        if (isMmiQueueFull()) {
-            //todo: replace the generic failure with specific error code.
+    public boolean handleUssdRequest(String ussdRequest, ResultReceiver wrappedCallback)
+            throws CallStateException {
+        if (mPendingMMIs.size() > 0) {
+            // There are MMI codes in progress; fail attempt now.
+            Rlog.i(LOG_TAG, "handleUssdRequest: queue full: " + Rlog.pii(LOG_TAG, ussdRequest));
             sendUssdResponse(ussdRequest, null, TelephonyManager.USSD_RETURN_FAILURE,
                     wrappedCallback );
             return true;
         }
         try {
             dialInternal(ussdRequest, VideoProfile.STATE_AUDIO_ONLY, null, wrappedCallback);
+        } catch (CallStateException cse) {
+            if (CS_FALLBACK.equals(cse.getMessage())) {
+                throw cse;
+            } else {
+                Rlog.w(LOG_TAG, "Could not execute USSD " + cse);
+                sendUssdResponse(ussdRequest, null, TelephonyManager.USSD_RETURN_FAILURE,
+                        wrappedCallback);
+            }
         } catch (Exception e) {
-            Rlog.d(LOG_TAG, "exception" + e);
+            Rlog.w(LOG_TAG, "Could not execute USSD " + e);
+            sendUssdResponse(ussdRequest, null, TelephonyManager.USSD_RETURN_FAILURE,
+                    wrappedCallback);
             return false;
         }
         return true;
@@ -580,16 +592,6 @@ public class ImsPhone extends ImsPhoneBase {
         mDefaultPhone.notifyForVideoCapabilityChanged(isVideoCapable);
     }
 
-    protected synchronized boolean addToMMIQueue(ImsPhoneMmiCode mmi) {
-        if (mPendingMMIs.size() >= 1) {
-            mMMIQueue.offerLast(mmi);
-            return true;
-        }
-        mPendingMMIs.add(mmi);
-        mMmiRegistrants.notifyRegistrants(new AsyncResult(null, mmi, null));
-        return false;
-    }
-
     @Override
     public Connection
     dial(String dialString, int videoState) throws CallStateException {
@@ -612,8 +614,19 @@ public class ImsPhone extends ImsPhoneBase {
     private Connection dialInternal(String dialString, int videoState,
                                     Bundle intentExtras, ResultReceiver wrappedCallback)
             throws CallStateException {
-        // Need to make sure dialString gets parsed properly
-        String newDialString = PhoneNumberUtils.stripSeparators(dialString);
+        boolean isConferenceUri = false;
+        boolean isSkipSchemaParsing = false;
+        if (intentExtras != null) {
+            isConferenceUri = intentExtras.getBoolean(
+                    TelephonyProperties.EXTRA_DIAL_CONFERENCE_URI, false);
+            isSkipSchemaParsing = intentExtras.getBoolean(
+                    TelephonyProperties.EXTRA_SKIP_SCHEMA_PARSING, false);
+        }
+        String newDialString = dialString;
+        // Need to make sure dialString gets parsed properly.
+        if (!isConferenceUri && !isSkipSchemaParsing) {
+            newDialString = PhoneNumberUtils.stripSeparators(dialString);
+        }
 
         // handle in-call MMI first if applicable
         if (handleInCallMmiCommands(newDialString)) {
@@ -627,9 +640,9 @@ public class ImsPhone extends ImsPhoneBase {
         // Only look at the Network portion for mmi
         String networkPortion = PhoneNumberUtils.extractNetworkPortionAlt(newDialString);
         ImsPhoneMmiCode mmi =
-                ImsPhoneMmiCode.newFromDialString(networkPortion, this);
+                ImsPhoneMmiCode.newFromDialString(networkPortion, this, wrappedCallback);
         if (DBG) Rlog.d(LOG_TAG,
-                "dialing w/ mmi '" + mmi + "'...");
+                "dialInternal: dialing w/ mmi '" + mmi + "'...");
 
         if (mmi == null) {
             return mCT.dial(dialString, videoState, intentExtras);
@@ -638,24 +651,34 @@ public class ImsPhone extends ImsPhoneBase {
         } else if (!mmi.isSupportedOverImsPhone()) {
             // If the mmi is not supported by IMS service,
             // try to initiate dialing with default phone
+            // Note: This code is never reached; there is a bug in isSupportedOverImsPhone which
+            // causes it to return true even though the "processCode" method ultimately throws the
+            // exception.
+            Rlog.i(LOG_TAG, "dialInternal: USSD not supported by IMS; fallback to CS.");
             throw new CallStateException(CS_FALLBACK);
         } else {
-            return dialInternal(mmi);
+            mPendingMMIs.add(mmi);
+            mMmiRegistrants.notifyRegistrants(new AsyncResult(null, mmi, null));
+
+            try {
+                mmi.processCode();
+            } catch (CallStateException cse) {
+                if (CS_FALLBACK.equals(cse.getMessage())) {
+                    Rlog.i(LOG_TAG, "dialInternal: fallback to GSM required.");
+                    // Make sure we remove from the list of pending MMIs since it will handover to
+                    // GSM.
+                    mPendingMMIs.remove(mmi);
+                    throw cse;
+                }
+            }
+
+            return null;
         }
     }
 
-    protected Connection dialInternal(ImsPhoneMmiCode mmi) {
-        if (addToMMIQueue(mmi)) {
-            return null;
-        }
-        try {
-            mmi.processCode();
-        } catch (CallStateException e) {
-            //do nothing
-        }
-
-        // FIXME should this return null or something else?
-        return null;
+    @Override
+    public void addParticipant(String dialString) throws CallStateException {
+        mCT.addParticipant(dialString);
     }
 
     @Override
@@ -820,7 +843,15 @@ public class ImsPhone extends ImsPhoneBase {
     @Override
     public void getCallForwardingOption(int commandInterfaceCFReason,
             Message onComplete) {
-        if (DBG) Rlog.d(LOG_TAG, "getCallForwardingOption reason=" + commandInterfaceCFReason);
+        getCallForwardingOption(commandInterfaceCFReason,
+            SERVICE_CLASS_VOICE, onComplete);
+    }
+
+    @Override
+    public void getCallForwardingOption(int commandInterfaceCFReason,
+            int commandInterfaceServiceClass, Message onComplete) {
+        if (DBG) Rlog.d(LOG_TAG, "getCallForwardingOption reason=" + commandInterfaceCFReason +
+                "serviceclass =" + commandInterfaceServiceClass);
         if (isValidCommandInterfaceCFReason(commandInterfaceCFReason)) {
             if (DBG) Rlog.d(LOG_TAG, "requesting call forwarding query.");
             Message resp;
@@ -828,14 +859,16 @@ public class ImsPhone extends ImsPhoneBase {
 
             try {
                 ImsUtInterface ut = mCT.getUtInterface();
-                ut.queryCallForward(getConditionFromCFReason(commandInterfaceCFReason), null, resp);
+                ut.queryCallForward(getConditionFromCFReason(commandInterfaceCFReason), null,
+                        commandInterfaceServiceClass, resp);
             } catch (ImsException e) {
                 sendErrorResponse(onComplete, e);
             }
         } else if (onComplete != null) {
-            sendErrorResponse(onComplete);
+             sendErrorResponse(onComplete);
         }
     }
+
 
     @Override
     public void setCallForwardingOption(int commandInterfaceCFAction,
@@ -847,6 +880,7 @@ public class ImsPhone extends ImsPhoneBase {
                 CommandsInterface.SERVICE_CLASS_VOICE, timerSeconds, onComplete);
     }
 
+    @Override
     public void setCallForwardingOption(int commandInterfaceCFAction,
             int commandInterfaceCFReason,
             String dialingNumber,
@@ -1010,8 +1044,8 @@ public class ImsPhone extends ImsPhoneBase {
         }
     }
 
-    /* package */
-    void sendErrorResponse(Message onComplete, Throwable e) {
+    @VisibleForTesting
+    public void sendErrorResponse(Message onComplete, Throwable e) {
         Rlog.d(LOG_TAG, "sendErrorResponse");
         if (onComplete != null) {
             AsyncResult.forMessage(onComplete, null, getCommandException(e));
@@ -1099,15 +1133,6 @@ public class ImsPhone extends ImsPhoneBase {
                         isUssdRequest,
                         this);
                 onNetworkInitiatedUssd(mmi);
-        } else {
-            if (mMMIQueue.peek() != null) {
-                try {
-
-                    dialInternal(mMMIQueue.remove());
-                } catch (Exception e) {
-                    Rlog.d(LOG_TAG,"Exception:" + e);
-                }
-            }
         }
     }
 
@@ -1122,6 +1147,7 @@ public class ImsPhone extends ImsPhoneBase {
          * The exception is cancellation of an incoming USSD-REQUEST, which is
          * not on the list.
          */
+        Rlog.d(LOG_TAG, "onMMIDone: mmi=" + mmi);
         if (mPendingMMIs.remove(mmi) || mmi.isUssdRequest()) {
             ResultReceiver receiverCallback = mmi.getUssdCallbackReceiver();
             if (receiverCallback != null) {
@@ -1130,6 +1156,7 @@ public class ImsPhone extends ImsPhoneBase {
                 sendUssdResponse(mmi.getDialString(), mmi.getMessage(), returnCode,
                         receiverCallback );
             } else {
+                Rlog.v(LOG_TAG, "onMMIDone: notifyRegistrants");
                 mMmiCompleteRegistrants.notifyRegistrants(
                     new AsyncResult(null, mmi, null));
             }
@@ -1204,7 +1231,12 @@ public class ImsPhone extends ImsPhoneBase {
         CallForwardInfo cfInfo = new CallForwardInfo();
         cfInfo.status = info.mStatus;
         cfInfo.reason = getCFReasonFromCondition(info.mCondition);
-        cfInfo.serviceClass = SERVICE_CLASS_VOICE;
+        //Check if the service class signifies Video call forward
+        if(info.mServiceClass == (SERVICE_CLASS_DATA_SYNC + SERVICE_CLASS_PACKET)) {
+            cfInfo.serviceClass = info.mServiceClass;
+        } else {
+            cfInfo.serviceClass = SERVICE_CLASS_VOICE;
+        }
         cfInfo.toa = info.mToA;
         cfInfo.number = info.mNumber;
         cfInfo.timeSeconds = info.mTimeSeconds;
@@ -1228,7 +1260,12 @@ public class ImsPhone extends ImsPhoneBase {
         } else {
             for (int i = 0, s = infos.length; i < s; i++) {
                 if (infos[i].mCondition == ImsUtInterface.CDIV_CF_UNCONDITIONAL) {
-                    if (r != null) {
+                    //Check if the service class signifies Video call forward
+                    if (infos[i].mServiceClass == (SERVICE_CLASS_DATA_SYNC +
+                                SERVICE_CLASS_PACKET)) {
+                        setVideoCallForwardingPreference(infos[i].mStatus == 1);
+                        notifyCallForwardingIndicator();
+                    } else if (r != null) {
                         setVoiceCallForwardingFlag(r, 1, (infos[i].mStatus == 1),
                             infos[i].mNumber);
                     }
@@ -1568,8 +1605,7 @@ public class ImsPhone extends ImsPhoneBase {
                                 PendingIntent.FLAG_UPDATE_CURRENT
                         );
 
-                final Notification notification =
-                        new TelephonyNotificationBuilder(mContext)
+                final Notification notification = new Notification.Builder(mContext)
                                 .setSmallIcon(android.R.drawable.stat_sys_warning)
                                 .setContentTitle(title)
                                 .setContentText(messageNotification)
@@ -1577,7 +1613,7 @@ public class ImsPhone extends ImsPhoneBase {
                                 .setContentIntent(resultPendingIntent)
                                 .setStyle(new Notification.BigTextStyle()
                                 .bigText(messageNotification))
-                                .setChannel(TelephonyNotificationBuilder.CHANNEL_ID_WFC)
+                                .setChannelId(NotificationChannelController.CHANNEL_ID_WFC)
                                 .build();
                 final String notificationTag = "wifi_calling";
                 final int notificationId = 1;
@@ -1702,6 +1738,11 @@ public class ImsPhone extends ImsPhoneBase {
     @Override
     public void setBroadcastEmergencyCallStateChanges(boolean broadcast) {
         mDefaultPhone.setBroadcastEmergencyCallStateChanges(broadcast);
+    }
+
+    @Override
+    public void notifyCallForwardingIndicator() {
+        mDefaultPhone.notifyCallForwardingIndicator();
     }
 
     @VisibleForTesting

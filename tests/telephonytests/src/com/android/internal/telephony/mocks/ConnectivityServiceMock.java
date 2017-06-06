@@ -127,6 +127,9 @@ public class ConnectivityServiceMock extends IConnectivityManager.Stub
 
     public void die() {
         // clean up threads/handlers
+        if (mHandlerThread != null) {
+            mHandlerThread.quit();
+        }
     }
 
     private class InternalHandler extends Handler {
@@ -515,6 +518,10 @@ public class ConnectivityServiceMock extends IConnectivityManager.Stub
     }
 
     public void setAvoidUnvalidated(Network network) {
+        throw new RuntimeException("not implemented");
+    }
+
+    public void startCaptivePortalApp(Network network) {
         throw new RuntimeException("not implemented");
     }
 

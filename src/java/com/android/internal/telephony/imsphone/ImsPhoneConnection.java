@@ -42,6 +42,7 @@ import com.android.internal.telephony.CallStateException;
 import com.android.internal.telephony.Connection;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.telephony.TelephonyProperties;
 import com.android.internal.telephony.UUSInfo;
 
 import com.android.ims.ImsCall;
@@ -193,17 +194,37 @@ public class ImsPhoneConnection extends Connection implements
     /** This is an MO call, created when dialing */
     public ImsPhoneConnection(Phone phone, String dialString, ImsPhoneCallTracker ct,
             ImsPhoneCall parent, boolean isEmergency) {
+        this(phone, dialString, ct, parent, isEmergency, null);
+    }
+
+    /** This is an MO call, created when dialing */
+    public ImsPhoneConnection(Phone phone, String dialString, ImsPhoneCallTracker ct,
+            ImsPhoneCall parent, boolean isEmergency, Bundle extras) {
         super(PhoneConstants.PHONE_TYPE_IMS);
         createWakeLock(phone.getContext());
         acquireWakeLock();
+        boolean isConferenceUri = false;
+        boolean isSkipSchemaParsing = false;
+
+        if (extras != null) {
+            isConferenceUri = extras.getBoolean(
+                    TelephonyProperties.EXTRA_DIAL_CONFERENCE_URI, false);
+            isSkipSchemaParsing = extras.getBoolean(
+                    TelephonyProperties.EXTRA_SKIP_SCHEMA_PARSING, false);
+        }
 
         mOwner = ct;
         mHandler = new MyHandler(mOwner.getLooper());
 
         mDialString = dialString;
 
-        mAddress = PhoneNumberUtils.extractNetworkPortionAlt(dialString);
-        mPostDialString = PhoneNumberUtils.extractPostDialPortion(dialString);
+        if (isConferenceUri || isSkipSchemaParsing) {
+            mAddress = dialString;
+            mPostDialString = "";
+        } else {
+            mAddress = PhoneNumberUtils.extractNetworkPortionAlt(dialString);
+            mPostDialString = PhoneNumberUtils.extractPostDialPortion(dialString);
+        }
 
         //mIndex = -1;
 
@@ -410,8 +431,10 @@ public class ImsPhoneConnection extends Connection implements
             } else {
                 Rlog.d(LOG_TAG, "onDisconnect: no parent");
             }
-            if (mImsCall != null) mImsCall.close();
-            mImsCall = null;
+            synchronized (this) {
+                if (mImsCall != null) mImsCall.close();
+                mImsCall = null;
+            }
         }
         releaseWakeLock();
         return changed;
@@ -608,7 +631,7 @@ public class ImsPhoneConnection extends Connection implements
     }
 
     @Override
-    public boolean isMultiparty() {
+    public synchronized boolean isMultiparty() {
         return mImsCall != null && mImsCall.isMultiparty();
     }
 
@@ -621,11 +644,8 @@ public class ImsPhoneConnection extends Connection implements
      *      {@code false} otherwise.
      */
     @Override
-    public boolean isConferenceHost() {
-        if (mImsCall == null) {
-            return false;
-        }
-        return mImsCall.isConferenceHost();
+    public synchronized boolean isConferenceHost() {
+        return mImsCall != null && mImsCall.isConferenceHost();
     }
 
     @Override
@@ -633,11 +653,11 @@ public class ImsPhoneConnection extends Connection implements
         return !isConferenceHost();
     }
 
-    public ImsCall getImsCall() {
+    public synchronized ImsCall getImsCall() {
         return mImsCall;
     }
 
-    public void setImsCall(ImsCall imsCall) {
+    public synchronized void setImsCall(ImsCall imsCall) {
         mImsCall = imsCall;
     }
 
@@ -1007,10 +1027,12 @@ public class ImsPhoneConnection extends Connection implements
         sb.append(" address: ");
         sb.append(Rlog.pii(LOG_TAG, getAddress()));
         sb.append(" ImsCall: ");
-        if (mImsCall == null) {
-            sb.append("null");
-        } else {
-            sb.append(mImsCall);
+        synchronized (this) {
+            if (mImsCall == null) {
+                sb.append("null");
+            } else {
+                sb.append(mImsCall);
+            }
         }
         sb.append("]");
         return sb.toString();

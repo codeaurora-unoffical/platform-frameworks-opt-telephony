@@ -58,6 +58,7 @@ import com.android.ims.ImsConfig;
 import com.android.ims.ImsManager;
 import com.android.internal.R;
 import com.android.internal.telephony.dataconnection.DcTracker;
+import com.android.internal.telephony.imsphone.ImsPhone;
 import com.android.internal.telephony.imsphone.ImsPhoneCall;
 import com.android.internal.telephony.test.SimulatedRadioControl;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppType;
@@ -209,6 +210,9 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     // Key used to read/write the ID for storing the voice mail
     private static final String VM_ID = "vm_id_key";
 
+    // Key used to read/write if Video Call Forwarding is enabled
+    public static final String CF_ENABLED_VIDEO = "cf_enabled_key_video";
+
     // Key used for storing call forwarding status
     public static final String CF_STATUS = "cf_status_key";
     // Key used to read/write the ID for storing the call forwarding status
@@ -216,6 +220,9 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
     // Key used to read/write "disable DNS server check" pref (used for testing)
     private static final String DNS_SERVER_CHECK_DISABLED_KEY = "dns_server_check_disabled_key";
+
+    // Integer used to let the calling application know that the we are ignoring auto mode switch.
+    private static final int ALREADY_IN_AUTO_SELECTION = 1;
 
     /**
      * Small container class used to hold information relevant to
@@ -278,6 +285,11 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     protected TelephonyComponentFactory mTelephonyComponentFactory;
 
     //IMS
+    /**
+     * {@link CallStateException} message text used to indicate that an IMS call has failed because
+     * it needs to be retried using GSM or CDMA (e.g. CS fallback).
+     * TODO: Replace this with a proper exception; {@link CallStateException} doesn't make sense.
+     */
     public static final String CS_FALLBACK = "cs_fallback";
     public static final String EXTRA_KEY_ALERT_TITLE = "alertTitle";
     public static final String EXTRA_KEY_ALERT_MESSAGE = "alertMessage";
@@ -537,15 +549,18 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
         synchronized(Phone.lockForRadioTechnologyChange) {
             IntentFilter filter = new IntentFilter();
-            filter.addAction(ImsManager.ACTION_IMS_SERVICE_UP);
-            filter.addAction(ImsManager.ACTION_IMS_SERVICE_DOWN);
+            ImsManager imsManager = ImsManager.getInstance(mContext, getPhoneId());
+            // Don't listen to deprecated intents using the new dynamic binding.
+            if (imsManager != null && !imsManager.isDynamicBinding()) {
+                filter.addAction(ImsManager.ACTION_IMS_SERVICE_UP);
+                filter.addAction(ImsManager.ACTION_IMS_SERVICE_DOWN);
+            }
             filter.addAction(ImsConfig.ACTION_IMS_CONFIG_CHANGED);
             mContext.registerReceiver(mImsIntentReceiver, filter);
 
             // Monitor IMS service - but first poll to see if already up (could miss
             // intent). Also, when using new ImsResolver APIs, the service will be available soon,
             // so start trying to bind.
-            ImsManager imsManager = ImsManager.getInstance(mContext, getPhoneId());
             if (imsManager != null) {
                 // If it is dynamic binding, kick off ImsPhone creation now instead of waiting for
                 // the service to be available.
@@ -1161,6 +1176,11 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
             mCi.setNetworkSelectionModeAutomatic(msg);
         } else {
             Rlog.d(LOG_TAG, "setNetworkSelectionModeAutomatic - already auto, ignoring");
+            // let the calling application know that the we are ignoring automatic mode switch.
+            if (nsm.message != null) {
+                nsm.message.arg1 = ALREADY_IN_AUTO_SELECTION;
+            }
+
             ar.userObj = nsm;
             handleSetSelectNetwork(ar);
         }
@@ -1785,7 +1805,30 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         if (callForwardingIndicator == IccRecords.CALL_FORWARDING_STATUS_UNKNOWN) {
             callForwardingIndicator = getCallForwardingIndicatorFromSharedPref();
         }
-        return (callForwardingIndicator == IccRecords.CALL_FORWARDING_STATUS_ENABLED);
+        return ((callForwardingIndicator == IccRecords.CALL_FORWARDING_STATUS_ENABLED) ||
+                getVideoCallForwardingPreference());
+    }
+
+    /**
+     * This method stores the CF_ENABLED_VIDEO flag in preferences
+     * @param enabled
+     */
+    public void setVideoCallForwardingPreference(boolean enabled) {
+        Rlog.d(LOG_TAG, "Set video call forwarding info to preferences enabled = " + enabled);
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
+        SharedPreferences.Editor edit = sp.edit();
+        edit.putBoolean(CF_ENABLED_VIDEO + getSubId(), enabled);
+        edit.commit();
+    }
+
+    /**
+     * This method gets Video Call Forwarding enabled/disabled from preferences
+     */
+    public boolean getVideoCallForwardingPreference() {
+        Rlog.d(LOG_TAG, "Get video call forwarding info from preferences");
+
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
+        return sp.getBoolean(CF_ENABLED_VIDEO + getSubId(), false);
     }
 
     public CarrierSignalAgent getCarrierSignalAgent() {
@@ -2341,6 +2384,23 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      */
     public String getCdmaPrlVersion(){
         return null;
+    }
+
+    /**
+     * Initiate to add a participant in an IMS call.
+     * This happens asynchronously, so you cannot assume the audio path is
+     * connected (or a call index has been assigned) until PhoneStateChanged
+     * notification has occurred.
+     *
+     * @exception CallStateException if a new outgoing call is not currently
+     *                possible because no more call slots exist or a call exists
+     *                that is dialing, alerting, ringing, or waiting. Other
+     *                errors are handled asynchronously.
+     */
+    public void addParticipant(String dialString) throws CallStateException {
+        // To be overridden by GsmCdmaPhone and ImsPhone.
+        throw new CallStateException("addParticipant :: No-Op base implementation. "
+                + this);
     }
 
     /**
@@ -3473,6 +3533,17 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      **/
     public void setSimPowerState(boolean powerUp) {
         mCi.setSimCardPower(powerUp, null);
+    }
+
+    @Override
+    public void getCallForwardingOption(int commandInterfaceCFReason,
+            int commandInterfaceServiceClass, Message onComplete) {
+    }
+
+    @Override
+    public void setCallForwardingOption(int commandInterfaceCFReason,
+            int commandInterfaceCFAction, String dialingNumber,
+            int commandInterfaceServiceClass, int timerSeconds, Message onComplete) {
     }
 
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {

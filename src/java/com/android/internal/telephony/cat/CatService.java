@@ -900,8 +900,9 @@ public class CatService extends Handler implements AppInterface {
         // This sends an intent with CARD_ABSENT (0 - false) /CARD_PRESENT (1 - true).
         intent.putExtra(AppInterface.CARD_STATUS, cardPresent);
         intent.setComponent(AppInterface.getDefaultSTKApplication());
+        intent.putExtra("SLOT_ID", mSlotId);
         CatLog.d(this, "Sending Card Status: "
-                + cardState + " " + "cardPresent: " + cardPresent);
+                + cardState + " " + "cardPresent: " + cardPresent +  "SLOT_ID: " +  mSlotId);
         mContext.sendBroadcast(intent, AppInterface.STK_PERMISSION);
     }
 
@@ -1064,6 +1065,13 @@ public class CatService extends Handler implements AppInterface {
             }
             break;
         case NO_RESPONSE_FROM_USER:
+            // No need to send terminal response for SET UP CALL on user timeout,
+            // instead use dedicated API
+            if (type == CommandType.SET_UP_CALL) {
+                mCmdIf.handleCallSetupRequestFromSim(false, null);
+                mCurrntCmd = null;
+                return;
+            }
         case UICC_SESSION_TERM_BY_USER:
             resp = null;
             break;
