@@ -2387,6 +2387,34 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     }
 
     /**
+     * Initiate to add a participant in an IMS call.
+     * This happens asynchronously, so you cannot assume the audio path is
+     * connected (or a call index has been assigned) until PhoneStateChanged
+     * notification has occurred.
+     *
+     * @exception CallStateException if a new outgoing call is not currently
+     *                possible because no more call slots exist or a call exists
+     *                that is dialing, alerting, ringing, or waiting. Other
+     *                errors are handled asynchronously.
+     */
+    public void addParticipant(String dialString) throws CallStateException {
+        // To be overridden by GsmCdmaPhone and ImsPhone.
+        throw new CallStateException("addParticipant :: No-Op base implementation. "
+                + this);
+    }
+
+    /**
+     * Initiate to add a participant in an IMS call.
+     *
+     * @exception CallStateException operation is not supported.
+     */
+    public void addParticipant(String dialString, Message onComplete) throws CallStateException {
+        // To be overridden by GsmCdmaPhone and ImsPhone.
+        throw new CallStateException("addParticipant :: No-Op base implementation. "
+                + this);
+    }
+
+    /**
      * send burst DTMF tone, it can send the string as single character or multiple character
      * ignore if there is no active call or not valid digits string.
      * Valid digit means only includes characters ISO-LATIN characters 0-9, *, #
@@ -3337,8 +3365,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      */
     public boolean isVideoEnabled() {
         Phone imsPhone = mImsPhone;
-        if ((imsPhone != null)
-                && (imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE)) {
+        if (imsPhone != null) {
             return imsPhone.isVideoEnabled();
         }
         return false;
