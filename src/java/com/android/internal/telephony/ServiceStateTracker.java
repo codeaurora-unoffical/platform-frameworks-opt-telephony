@@ -93,6 +93,8 @@ import com.android.internal.telephony.uicc.UiccCardApplication;
 import com.android.internal.telephony.uicc.UiccController;
 import com.android.internal.util.IndentingPrintWriter;
 
+import org.codeaurora.internal.IExtTelephony;
+
 /**
  * {@hide}
  */
@@ -256,6 +258,10 @@ public class ServiceStateTracker extends Handler {
     protected static final String REGISTRATION_DENIED_GEN  = "General";
     protected static final String REGISTRATION_DENIED_AUTH = "Authentication Failure";
 
+    // value for subsidy lock resticted state
+    private static final int UNLOCKED = 100;
+    private static final String SUBSIDY_STATUS = "subsidy_status";
+    private static final String SUBSIDY_LOCK_SYSTEM_PROPERY = "ro.radio.subsidylock";
     private boolean mImsRegistrationOnOff = false;
     private boolean mAlarmSwitch = false;
     /** Radio is disabled by carrier. Radio power will not be override if this field is set */
@@ -311,6 +317,11 @@ public class ServiceStateTracker extends Handler {
 
                     boolean restoreSelection = !context.getResources().getBoolean(
                             com.android.internal.R.bool.skip_restoring_network_selection);
+
+                    if (isSubsidyRestricted()) {
+                        mPhone.setNetworkSelectionModeAutomatic(null);
+                        restoreSelection = false;
+                    }
                     mPhone.sendSubscriptionSettings(restoreSelection);
 
                     mPhone.setSystemProperty(TelephonyProperties.PROPERTY_DATA_NETWORK_TYPE,
@@ -569,6 +580,27 @@ public class ServiceStateTracker extends Handler {
                 CarrierServiceStateTracker.CARRIER_EVENT_DATA_REGISTRATION, null);
         registerForDataConnectionDetached(mCSST,
                 CarrierServiceStateTracker.CARRIER_EVENT_DATA_DEREGISTRATION, null);
+    }
+
+    private boolean isSubsidyRestricted() {
+        boolean subsidyLocked = Settings.Secure.getInt(
+                mPhone.getContext().getContentResolver(),
+                SUBSIDY_STATUS, -1) > UNLOCKED;// not in UNLOCKED state
+        boolean isWhiteListed = false;
+        try {
+            IExtTelephony extTelephony =
+                    IExtTelephony.Stub.asInterface(ServiceManager.getService("extphone"));
+            isWhiteListed = extTelephony.isPrimaryCarrierSlotId(mPhone.getPhoneId());
+        } catch (RemoteException ex) {
+            ex.printStackTrace();
+        } catch (NullPointerException ex) {
+            ex.printStackTrace();
+        }
+        return isSubSidyLockFeatureEnabled() && subsidyLocked && isWhiteListed;
+    }
+
+    private static boolean isSubSidyLockFeatureEnabled() {
+        return SystemProperties.getInt(SUBSIDY_LOCK_SYSTEM_PROPERY, 0) == 1;
     }
 
     @VisibleForTesting
