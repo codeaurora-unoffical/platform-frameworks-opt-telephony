@@ -27,6 +27,7 @@ import android.os.PersistableBundle;
 import android.os.PowerManager;
 import android.os.Registrant;
 import android.os.SystemClock;
+import android.telecom.Call;
 import android.telecom.VideoProfile;
 import android.telephony.CarrierConfigManager;
 import android.telephony.DisconnectCause;
@@ -35,6 +36,8 @@ import android.telephony.Rlog;
 import android.telephony.ServiceState;
 import android.text.TextUtils;
 
+import com.android.ims.ImsCall;
+import com.android.ims.ImsCallProfile;
 import com.android.ims.ImsException;
 import com.android.ims.ImsStreamMediaProfile;
 import com.android.ims.internal.ImsVideoCallProviderWrapper;
@@ -44,9 +47,6 @@ import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.TelephonyProperties;
 import com.android.internal.telephony.UUSInfo;
-
-import com.android.ims.ImsCall;
-import com.android.ims.ImsCallProfile;
 
 import java.util.Objects;
 
@@ -104,6 +104,14 @@ public class ImsPhoneConnection extends Connection implements
     private ImsVideoCallProviderWrapper mImsVideoCallProviderWrapper;
 
     private int mPreciseDisconnectCause = 0;
+
+    private ImsRttTextHandler mRttTextHandler;
+    private android.telecom.Connection.RttTextStream mRttTextStream;
+
+    /**
+     * Used to indicate that this call is in the midst of being merged into a conference.
+     */
+    private boolean mIsMergeInProcess = false;
 
     //***** Event Constants
     private static final int EVENT_DTMF_DONE = 1;
@@ -253,6 +261,11 @@ public class ImsPhoneConnection extends Connection implements
     static boolean
     equalsHandlesNulls (Object a, Object b) {
         return (a == null) ? (b == null) : a.equals (b);
+    }
+
+    static boolean
+    equalsBaseDialString (String a, String b) {
+        return (a == null) ? (b == null) : (b != null && a.startsWith (b));
     }
 
     private static int applyLocalCallCapabilities(ImsCallProfile localProfile, int capabilities) {
@@ -670,6 +683,7 @@ public class ImsPhoneConnection extends Connection implements
      *     changed, and {@code false} otherwise.
      */
     public boolean update(ImsCall imsCall, ImsPhoneCall.State state) {
+        updateCallStateToVideoCallProvider(state);
         if (state == ImsPhoneCall.State.ACTIVE) {
             // If the state of the call is active, but there is a pending request to the RIL to hold
             // the call, we will skip this update.  This is really a signalling delay or failure
@@ -774,29 +788,39 @@ public class ImsPhoneConnection extends Connection implements
             int namep = ImsCallProfile.OIRToPresentation(
                     callProfile.getCallExtraInt(ImsCallProfile.EXTRA_CNAP));
             if (Phone.DEBUG_PHONE) {
-                Rlog.d(LOG_TAG, "address = " + Rlog.pii(LOG_TAG, address) + " name = " + name +
-                        " nump = " + nump + " namep = " + namep);
+                Rlog.d(LOG_TAG, "callId = " + getTelecomCallId() + " address = " + Rlog.pii(LOG_TAG,
+                        address) + " name = " + name + " nump = " + nump + " namep = " + namep);
             }
-            if(equalsHandlesNulls(mAddress, address)) {
-                mAddress = address;
-                changed = true;
-            }
-            if (TextUtils.isEmpty(name)) {
-                if (!TextUtils.isEmpty(mCnapName)) {
-                    mCnapName = "";
+            if (!mIsMergeInProcess) {
+                // Only process changes to the name and address when a merge is not in process.
+                // When call A initiated a merge with call B to form a conference C, there is a
+                // point in time when the ImsCall transfers the conference call session into A,
+                // at which point the ImsConferenceController creates the conference in Telecom.
+                // For some carriers C will have a unique conference URI address.  Swapping the
+                // conference session into A, which is about to be disconnected, to be logged to
+                // the call log using the conference address.  To prevent this we suppress updates
+                // to the call address while a merge is in process.
+                if (!equalsBaseDialString(mAddress, address)) {
+                    mAddress = address;
                     changed = true;
                 }
-            } else if (!name.equals(mCnapName)) {
-                mCnapName = name;
-                changed = true;
-            }
-            if (mNumberPresentation != nump) {
-                mNumberPresentation = nump;
-                changed = true;
-            }
-            if (mCnapNamePresentation != namep) {
-                mCnapNamePresentation = namep;
-                changed = true;
+                if (TextUtils.isEmpty(name)) {
+                    if (!TextUtils.isEmpty(mCnapName)) {
+                        mCnapName = "";
+                        changed = true;
+                    }
+                } else if (!name.equals(mCnapName)) {
+                    mCnapName = name;
+                    changed = true;
+                }
+                if (mNumberPresentation != nump) {
+                    mNumberPresentation = nump;
+                    changed = true;
+                }
+                if (mCnapNamePresentation != namep) {
+                    mCnapNamePresentation = namep;
+                    changed = true;
+                }
             }
         }
         return changed;
@@ -841,6 +865,9 @@ public class ImsPhoneConnection extends Connection implements
                     }
 
                     if (!mShouldIgnoreVideoStateChanges) {
+                        if (mImsVideoCallProviderWrapper != null) {
+                            mImsVideoCallProviderWrapper.onVideoStateChanged(newVideoState);
+                        }
                         setVideoState(newVideoState);
                         changed = true;
                     } else {
@@ -902,6 +929,51 @@ public class ImsPhoneConnection extends Connection implements
         }
 
         return changed;
+    }
+
+    public void sendRttModifyRequest(android.telecom.Connection.RttTextStream textStream) {
+        getImsCall().sendRttModifyRequest();
+        setCurrentRttTextStream(textStream);
+    }
+
+    /**
+     * Sends the user's response to a remotely-issued RTT upgrade request
+     *
+     * @param textStream A valid {@link android.telecom.Connection.RttTextStream} if the user
+     *                   accepts, {@code null} if not.
+     */
+    public void sendRttModifyResponse(android.telecom.Connection.RttTextStream textStream) {
+        boolean accept = textStream != null;
+        ImsCall imsCall = getImsCall();
+
+        imsCall.sendRttModifyResponse(accept);
+        if (accept) {
+            setCurrentRttTextStream(textStream);
+            startRttTextProcessing();
+        } else {
+            Rlog.e(LOG_TAG, "sendRttModifyResponse: foreground call has no connections");
+        }
+    }
+
+    public void onRttMessageReceived(String message) {
+        getOrCreateRttTextHandler().sendToInCall(message);
+    }
+
+    public void setCurrentRttTextStream(android.telecom.Connection.RttTextStream rttTextStream) {
+        mRttTextStream = rttTextStream;
+    }
+
+    public void startRttTextProcessing() {
+        getOrCreateRttTextHandler().initialize(mRttTextStream);
+    }
+
+    private ImsRttTextHandler getOrCreateRttTextHandler() {
+        if (mRttTextHandler != null) {
+            return mRttTextHandler;
+        }
+        mRttTextHandler = new ImsRttTextHandler(Looper.getMainLooper(),
+                (message) -> getImsCall().sendRttMessage(message));
+        return mRttTextHandler;
     }
 
     /**
@@ -1139,5 +1211,42 @@ public class ImsPhoneConnection extends Connection implements
         }
 
         return mImsVideoCallProviderWrapper.wasVideoPausedFromSource(source);
+    }
+
+    private void updateCallStateToVideoCallProvider(ImsPhoneCall.State state) {
+        if (mImsVideoCallProviderWrapper == null) {
+            return;
+        }
+        mImsVideoCallProviderWrapper.onCallStateChanged(toTelecomCallState(state));
+    }
+
+    private static int toTelecomCallState(ImsPhoneCall.State state) {
+        switch(state) {
+            case IDLE:            return Call.STATE_NEW;
+            case ACTIVE:          return Call.STATE_ACTIVE;
+            case HOLDING:         return Call.STATE_HOLDING;
+            case DIALING:         return Call.STATE_DIALING;
+            case ALERTING:        return Call.STATE_DIALING;
+            case INCOMING:        return Call.STATE_RINGING;
+            case WAITING:         return Call.STATE_RINGING;
+            case DISCONNECTING:   return Call.STATE_DISCONNECTING;
+            case DISCONNECTED:    return Call.STATE_DISCONNECTED;
+            default:              return Call.STATE_NEW;
+        }
+    }
+    /**
+     * Mark the call as in the process of being merged and inform the UI of the merge start.
+     */
+    public void handleMergeStart() {
+        mIsMergeInProcess = true;
+        onConnectionEvent(android.telecom.Connection.EVENT_MERGE_START, null);
+    }
+
+    /**
+     * Mark the call as done merging and inform the UI of the merge start.
+     */
+    public void handleMergeComplete() {
+        mIsMergeInProcess = false;
+        onConnectionEvent(android.telecom.Connection.EVENT_MERGE_COMPLETE, null);
     }
 }

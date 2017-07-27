@@ -523,6 +523,7 @@ public class CatService extends Handler implements AppInterface {
 
     private void broadcastCatCmdIntent(CatCmdMessage cmdMsg) {
         Intent intent = new Intent(AppInterface.CAT_CMD_ACTION);
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         intent.putExtra("STK CMD", cmdMsg);
         intent.putExtra("SLOT_ID", mSlotId);
         intent.setComponent(AppInterface.getDefaultSTKApplication());
@@ -1026,6 +1027,13 @@ public class CatService extends Handler implements AppInterface {
                 }
                 break;
             case LAUNCH_BROWSER:
+                if (resMsg.mResCode == ResultCode.LAUNCH_BROWSER_ERROR) {
+                    // Additional info for Default URL unavailable.
+                    resMsg.setAdditionalInfo(0x04);
+                } else {
+                    resMsg.mIncludeAdditionalInfo = false;
+                    resMsg.mAdditionalInfo = 0;
+                }
                 break;
             // 3GPP TS.102.223: Open Channel alpha confirmation should not send TR
             case OPEN_CHANNEL:
