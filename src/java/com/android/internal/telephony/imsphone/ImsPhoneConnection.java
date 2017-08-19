@@ -780,7 +780,10 @@ public class ImsPhoneConnection extends Connection implements
 
         boolean changed = false;
         ImsCallProfile callProfile = imsCall.getCallProfile();
-        if (callProfile != null) {
+        if (callProfile != null && isIncoming()) {
+            // Only look for changes to the address for incoming calls.  The originating identity
+            // can change for outgoing calls due to, for example, a call being forwarded to
+            // voicemail.  This address change does not need to be presented to the user.
             String address = callProfile.getCallExtra(ImsCallProfile.EXTRA_OI);
             String name = callProfile.getCallExtra(ImsCallProfile.EXTRA_CNA);
             int nump = ImsCallProfile.OIRToPresentation(
@@ -788,8 +791,9 @@ public class ImsPhoneConnection extends Connection implements
             int namep = ImsCallProfile.OIRToPresentation(
                     callProfile.getCallExtraInt(ImsCallProfile.EXTRA_CNAP));
             if (Phone.DEBUG_PHONE) {
-                Rlog.d(LOG_TAG, "callId = " + getTelecomCallId() + " address = " + Rlog.pii(LOG_TAG,
-                        address) + " name = " + name + " nump = " + nump + " namep = " + namep);
+                Rlog.d(LOG_TAG, "updateAddressDisplay: callId = " + getTelecomCallId()
+                        + " address = " + Rlog.pii(LOG_TAG, address) + " name = " + name
+                        + " nump = " + nump + " namep = " + namep);
             }
             if (!mIsMergeInProcess) {
                 // Only process changes to the name and address when a merge is not in process.
@@ -865,10 +869,7 @@ public class ImsPhoneConnection extends Connection implements
                     }
 
                     if (!mShouldIgnoreVideoStateChanges) {
-                        if (mImsVideoCallProviderWrapper != null) {
-                            mImsVideoCallProviderWrapper.onVideoStateChanged(newVideoState);
-                        }
-                        setVideoState(newVideoState);
+                        updateVideoState(newVideoState);
                         changed = true;
                     } else {
                         Rlog.d(LOG_TAG, "updateMediaCapabilities - ignoring video state change " +
@@ -929,6 +930,13 @@ public class ImsPhoneConnection extends Connection implements
         }
 
         return changed;
+    }
+
+    private void updateVideoState(int newVideoState) {
+        if (mImsVideoCallProviderWrapper != null) {
+            mImsVideoCallProviderWrapper.onVideoStateChanged(newVideoState);
+        }
+        setVideoState(newVideoState);
     }
 
     public void sendRttModifyRequest(android.telecom.Connection.RttTextStream textStream) {
@@ -1248,5 +1256,21 @@ public class ImsPhoneConnection extends Connection implements
     public void handleMergeComplete() {
         mIsMergeInProcess = false;
         onConnectionEvent(android.telecom.Connection.EVENT_MERGE_COMPLETE, null);
+    }
+
+    public void changeToPausedState() {
+        int newVideoState = getVideoState() | VideoProfile.STATE_PAUSED;
+        Rlog.i(LOG_TAG, "ImsPhoneConnection: changeToPausedState - setting paused bit; "
+                + "newVideoState=" + VideoProfile.videoStateToString(newVideoState));
+        updateVideoState(newVideoState);
+        mShouldIgnoreVideoStateChanges = true;
+    }
+
+    public void changeToUnPausedState() {
+        int newVideoState = getVideoState() & ~VideoProfile.STATE_PAUSED;
+        Rlog.i(LOG_TAG, "ImsPhoneConnection: changeToUnPausedState - unsetting paused bit; "
+                + "newVideoState=" + VideoProfile.videoStateToString(newVideoState));
+        updateVideoState(newVideoState);
+        mShouldIgnoreVideoStateChanges = false;
     }
 }

@@ -52,6 +52,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -60,6 +61,7 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -83,8 +85,12 @@ public class SubscriptionController extends ISub.Stub {
     static final String LOG_TAG = "SubscriptionController";
     protected static final boolean DBG = true;
     protected static final boolean VDBG = false;
+    protected static final boolean DBG_CACHE = false;
     static final int MAX_LOCAL_LOG_LINES = 500; // TODO: Reduce to 100 when 17678050 is fixed
     private ScLocalLog mLocalLog = new ScLocalLog(MAX_LOCAL_LOG_LINES);
+
+    /* The Cache of Active SubInfoRecord(s) list of currently in use SubInfoRecord(s) */
+    private AtomicReference<List<SubscriptionInfo>> mCacheActiveSubInfoList = new AtomicReference();
 
     /**
      * Copied from android.util.LocalLog with flush() adding flush and line number
@@ -589,6 +595,43 @@ public class SubscriptionController extends ISub.Stub {
                 return null;
             }
 
+            // Get the active subscription info list from the cache if the cache is not null
+            List<SubscriptionInfo> tmpCachedSubList = mCacheActiveSubInfoList.get();
+            if (tmpCachedSubList != null) {
+                if (DBG_CACHE) {
+                    for (SubscriptionInfo si : tmpCachedSubList) {
+                        logd("[getActiveSubscriptionInfoList] Getting Cached subInfo=" + si);
+                    }
+                }
+                return new ArrayList<SubscriptionInfo>(tmpCachedSubList);
+            } else {
+                if (DBG_CACHE) {
+                    logd("[getActiveSubscriptionInfoList] Cached subInfo is null");
+                }
+                return null;
+            }
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
+    /**
+     * Refresh the cache of SubInfoRecord(s) of the currently inserted SIM(s)
+     */
+    @VisibleForTesting
+    protected void refreshCachedActiveSubscriptionInfoList() {
+
+        // Now that all security checks passes, perform the operation as ourselves.
+        final long identity = Binder.clearCallingIdentity();
+        try {
+            if (!isSubInfoReady()) {
+                if (DBG_CACHE) {
+                    logdl("[refreshCachedActiveSubscriptionInfoList] "
+                            + "Sub Controller not ready ");
+                }
+                return;
+            }
+
             List<SubscriptionInfo> subList = getSubInfo(
                     SubscriptionManager.SIM_SLOT_INDEX + ">=0", null);
 
@@ -596,12 +639,21 @@ public class SubscriptionController extends ISub.Stub {
                 // FIXME: Unnecessary when an insertion sort is used!
                 subList.sort(SUBSCRIPTION_INFO_COMPARATOR);
 
-                if (VDBG) logdl("[getActiveSubInfoList]- " + subList.size() + " infos return");
+                if (DBG_CACHE) {
+                    logdl("[refreshCachedActiveSubscriptionInfoList]- " + subList.size()
+                            + " infos return");
+                }
             } else {
-                if (DBG) logdl("[getActiveSubInfoList]- no info return");
+                if (DBG_CACHE) logdl("[refreshCachedActiveSubscriptionInfoList]- no info return");
             }
 
-            return subList;
+            if (DBG_CACHE) {
+                for (SubscriptionInfo si : subList) {
+                    logd("[refreshCachedActiveSubscriptionInfoList] Setting Cached subInfo=" + si);
+                }
+            }
+            mCacheActiveSubInfoList.set(subList);
+
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
@@ -614,8 +666,6 @@ public class SubscriptionController extends ISub.Stub {
      */
     @Override
     public int getActiveSubInfoCount(String callingPackage) {
-        if (DBG) logd("[getActiveSubInfoCount]+");
-
         if (!canReadPhoneState(callingPackage, "getActiveSubInfoCount")) {
             return 0;
         }
@@ -626,10 +676,10 @@ public class SubscriptionController extends ISub.Stub {
             List<SubscriptionInfo> records = getActiveSubscriptionInfoList(
                     mContext.getOpPackageName());
             if (records == null) {
-                if (DBG) logd("[getActiveSubInfoCount] records null");
+                if (VDBG) logd("[getActiveSubInfoCount] records null");
                 return 0;
             }
-            if (DBG) logd("[getActiveSubInfoCount]- count: " + records.size());
+            if (VDBG) logd("[getActiveSubInfoCount]- count: " + records.size());
             return records.size();
         } finally {
             Binder.restoreCallingIdentity(identity);
@@ -882,6 +932,9 @@ public class SubscriptionController extends ISub.Stub {
                         resolver.update(SubscriptionManager.CONTENT_URI, value,
                                 SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID +
                                         "=" + Long.toString(subId), null);
+
+                        // Refresh the Cache of Active Subscription Info List
+                        refreshCachedActiveSubscriptionInfoList();
                     }
 
                     if (DBG) logdl("[addSubInfoRecord] Record already exists");
@@ -900,10 +953,11 @@ public class SubscriptionController extends ISub.Stub {
                     do {
                         int subId = cursor.getInt(cursor.getColumnIndexOrThrow(
                                 SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID));
-                        // If sSlotIndexToSubId already has a valid subId for a slotIndex/phoneId,
-                        // do not add another subId for same slotIndex/phoneId.
+                        // If sSlotIndexToSubId already has the same subId for a slotIndex/phoneId,
+                        // do not add it.
                         Integer currentSubId = sSlotIndexToSubId.get(slotIndex);
                         if (currentSubId == null
+                                || currentSubId != subId
                                 || !SubscriptionManager.isValidSubscriptionId(currentSubId)) {
                             // TODO While two subs active, if user deactivats first
                             // one, need to update the default subId with second one.
@@ -974,6 +1028,9 @@ public class SubscriptionController extends ISub.Stub {
                         SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID +
                                 "=" + Long.toString(subId), null);
 
+                // Refresh the Cache of Active Subscription Info List
+                refreshCachedActiveSubscriptionInfoList();
+
                 if (DBG) logdl("[addSubInfoRecord] sim name = " + nameToSet);
             }
 
@@ -1006,7 +1063,13 @@ public class SubscriptionController extends ISub.Stub {
         value.put(SubscriptionManager.COLOR, color);
         value.put(SubscriptionManager.SIM_SLOT_INDEX, slotIndex);
         value.put(SubscriptionManager.CARRIER_NAME, "");
-        return resolver.insert(SubscriptionManager.CONTENT_URI, value);
+
+        Uri uri = resolver.insert(SubscriptionManager.CONTENT_URI, value);
+
+        // Refresh the Cache of Active Subscription Info List
+        refreshCachedActiveSubscriptionInfoList();
+
+        return uri;
     }
 
     /**
@@ -1072,6 +1135,10 @@ public class SubscriptionController extends ISub.Stub {
             int result = mContext.getContentResolver().update(SubscriptionManager.CONTENT_URI,
                     value, SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID + "=" +
                     Long.toString(subId), null);
+
+            // Refresh the Cache of Active Subscription Info List
+            refreshCachedActiveSubscriptionInfoList();
+
             notifySubscriptionInfoChanged();
 
             return result;
@@ -1103,6 +1170,10 @@ public class SubscriptionController extends ISub.Stub {
             int result = mContext.getContentResolver().update(SubscriptionManager.CONTENT_URI,
                     value, SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID + "=" +
                             Long.toString(subId), null);
+
+            // Refresh the Cache of Active Subscription Info List
+            refreshCachedActiveSubscriptionInfoList();
+
             notifySubscriptionInfoChanged();
 
             return result;
@@ -1163,6 +1234,10 @@ public class SubscriptionController extends ISub.Stub {
             int result = mContext.getContentResolver().update(SubscriptionManager.CONTENT_URI,
                     value, SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID + "=" +
                     Long.toString(subId), null);
+
+            // Refresh the Cache of Active Subscription Info List
+            refreshCachedActiveSubscriptionInfoList();
+
             notifySubscriptionInfoChanged();
 
             return result;
@@ -1205,6 +1280,10 @@ public class SubscriptionController extends ISub.Stub {
             result = mContext.getContentResolver().update(SubscriptionManager.CONTENT_URI, value,
                     SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID
                             + "=" + Long.toString(subId), null);
+
+            // Refresh the Cache of Active Subscription Info List
+            refreshCachedActiveSubscriptionInfoList();
+
             if (DBG) logd("[setDisplayNumber]- update result :" + result);
             notifySubscriptionInfoChanged();
 
@@ -1241,6 +1320,10 @@ public class SubscriptionController extends ISub.Stub {
             int result = mContext.getContentResolver().update(SubscriptionManager.CONTENT_URI,
                     value, SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID + "=" +
                     Long.toString(subId), null);
+
+            // Refresh the Cache of Active Subscription Info List
+            refreshCachedActiveSubscriptionInfoList();
+
             notifySubscriptionInfoChanged();
 
             return result;
@@ -1271,6 +1354,10 @@ public class SubscriptionController extends ISub.Stub {
 
         int result = mContext.getContentResolver().update(SubscriptionManager.CONTENT_URI, value,
                 SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID + "=" + Long.toString(subId), null);
+
+        // Refresh the Cache of Active Subscription Info List
+        refreshCachedActiveSubscriptionInfoList();
+
         notifySubscriptionInfoChanged();
 
         return result;
@@ -1822,7 +1909,7 @@ public class SubscriptionController extends ISub.Stub {
      */
     @Override
     public int[] getActiveSubIdList() {
-        Set<Entry<Integer, Integer>> simInfoSet = sSlotIndexToSubId.entrySet();
+        Set<Entry<Integer, Integer>> simInfoSet = new HashSet<>(sSlotIndexToSubId.entrySet());
 
         int[] subIdArr = new int[simInfoSet.size()];
         int i = 0;
@@ -1918,6 +2005,10 @@ public class SubscriptionController extends ISub.Stub {
         resolver.update(SubscriptionManager.CONTENT_URI, value,
                 SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID +
                         "=" + Integer.toString(subId), null);
+
+        // Refresh the Cache of Active Subscription Info List
+        refreshCachedActiveSubscriptionInfoList();
+
         Binder.restoreCallingIdentity(token);
     }
 
