@@ -1463,7 +1463,27 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
     }
 
     //***** Called from ImsPhone
+    /**
+     * Set the TTY mode. This is the actual tty mode (varies depending on peripheral status)
+     */
+    public void setTtyMode(int ttyMode) {
+        if (mImsManager == null) {
+            Log.w(LOG_TAG, "ImsManager is null when setting TTY mode");
+            return;
+        }
 
+        try {
+            mImsManager.setTtyMode(ttyMode);
+        } catch (ImsException e) {
+            loge("setTtyMode : " + e);
+            retryGetImsService();
+        }
+    }
+
+    /**
+     * Sets the UI TTY mode. This is the preferred TTY mode that the user sets in the call
+     * settings screen.
+     */
     public void setUiTTYMode(int uiTtyMode, Message onComplete) {
         if (mImsManager == null) {
             mPhone.sendErrorResponse(onComplete, getImsManagerIsNullException());
@@ -1473,7 +1493,7 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
         try {
             mImsManager.setUiTTYMode(mPhone.getContext(), uiTtyMode, onComplete);
         } catch (ImsException e) {
-            loge("setTTYMode : " + e);
+            loge("setUITTYMode : " + e);
             mPhone.sendErrorResponse(onComplete, e);
             retryGetImsService();
         }
@@ -1846,10 +1866,17 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
         return code;
     }
 
-    private int getDisconnectCauseFromReasonInfo(ImsReasonInfo reasonInfo) {
+    /**
+     * Maps an {@link ImsReasonInfo} reason code to a {@link DisconnectCause} cause code.
+     * The {@link Call.State} provided is the state of the call prior to disconnection.
+     * @param reasonInfo the {@link ImsReasonInfo} for the disconnection.
+     * @param callState The {@link Call.State} prior to disconnection.
+     * @return The {@link DisconnectCause} code.
+     */
+    @VisibleForTesting
+    public int getDisconnectCauseFromReasonInfo(ImsReasonInfo reasonInfo, Call.State callState) {
         int cause = DisconnectCause.ERROR_UNSPECIFIED;
 
-        //int type = reasonInfo.getReasonType();
         int code = maybeRemapReasonCode(reasonInfo);
         switch (code) {
             case ImsReasonInfo.CODE_SIP_BAD_ADDRESS:
@@ -1905,9 +1932,17 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
             case ImsReasonInfo.CODE_TIMEOUT_NO_ANSWER_CALL_UPDATE:
                 return DisconnectCause.TIMED_OUT;
 
-            case ImsReasonInfo.CODE_LOCAL_LOW_BATTERY:
             case ImsReasonInfo.CODE_LOCAL_POWER_OFF:
                 return DisconnectCause.POWER_OFF;
+
+            case ImsReasonInfo.CODE_LOCAL_LOW_BATTERY:
+            case ImsReasonInfo.CODE_LOW_BATTERY: {
+                if (callState == Call.State.DIALING) {
+                    return DisconnectCause.DIAL_LOW_BATTERY;
+                } else {
+                    return DisconnectCause.LOW_BATTERY;
+                }
+            }
 
             case ImsReasonInfo.CODE_FDN_BLOCKED:
                 return DisconnectCause.FDN_BLOCKED;
@@ -2062,8 +2097,18 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
                     return;
                 } else {
                     mPendingMO = null;
-                    int cause = getDisconnectCauseFromReasonInfo(reasonInfo);
                     ImsPhoneConnection conn = findConnection(imsCall);
+                    Call.State callState;
+                    if (conn != null) {
+                        callState = conn.getState();
+                    } else {
+                        // Need to fall back in case connection is null; it shouldn't be, but a sane
+                        // fallback is to assume we're dialing.  This state is only used to
+                        // determine which disconnect string to show in the case of a low battery
+                        // disconnect.
+                        callState = Call.State.DIALING;
+                    }
+                    int cause = getDisconnectCauseFromReasonInfo(reasonInfo, callState);
 
                     if(conn != null) {
                         conn.setPreciseDisconnectCause(
@@ -2081,8 +2126,18 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
         public void onCallTerminated(ImsCall imsCall, ImsReasonInfo reasonInfo) {
             if (DBG) log("onCallTerminated reasonCode=" + reasonInfo.getCode());
 
-            int cause = getDisconnectCauseFromReasonInfo(reasonInfo);
             ImsPhoneConnection conn = findConnection(imsCall);
+            Call.State callState;
+            if (conn != null) {
+                callState = conn.getState();
+            } else {
+                // Connection shouldn't be null, but if it is, we can assume the call was active.
+                // This call state is only used for determining which disconnect message to show in
+                // the case of the device's battery being low resulting in a call drop.
+                callState = Call.State.ACTIVE;
+            }
+            int cause = getDisconnectCauseFromReasonInfo(reasonInfo, callState);
+
             if (DBG) log("cause = " + cause + " conn = " + conn);
 
             if (conn != null) {
