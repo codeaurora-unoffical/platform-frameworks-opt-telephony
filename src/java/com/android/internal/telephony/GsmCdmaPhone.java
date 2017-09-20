@@ -196,7 +196,7 @@ public class GsmCdmaPhone extends Phone {
 
     private int mRilVersion;
     private boolean mBroadcastEmergencyCallStateChanges = false;
-
+    private CarrierKeyDownloadManager mCDM;
     // Constructors
 
     public GsmCdmaPhone(Context context, CommandsInterface ci, PhoneNotifier notifier, int phoneId,
@@ -278,6 +278,7 @@ public class GsmCdmaPhone extends Phone {
         mCi.registerForVoiceRadioTechChanged(this, EVENT_VOICE_RADIO_TECH_CHANGED, null);
         mContext.registerReceiver(mBroadcastReceiver, new IntentFilter(
                 CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED));
+        mCDM = new CarrierKeyDownloadManager(this);
     }
 
     private void initRatSpecific(int precisePhoneType) {
@@ -1930,6 +1931,8 @@ public class GsmCdmaPhone extends Phone {
 
     @Override
     public void setTTYMode(int ttyMode, Message onComplete) {
+        // Send out the TTY Mode change over RIL as well
+        super.setTTYMode(ttyMode, onComplete);
         if (mImsPhone != null) {
             mImsPhone.setTTYMode(ttyMode, onComplete);
         }
@@ -2143,6 +2146,7 @@ public class GsmCdmaPhone extends Phone {
     private void syncClirSetting() {
         SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(getContext());
         int clirSetting = sp.getInt(CLIR_KEY + getPhoneId(), -1);
+        Rlog.i(LOG_TAG, "syncClirSetting: " + CLIR_KEY + getPhoneId() + "=" + clirSetting);
         if (clirSetting >= 0) {
             mCi.setCLIR(clirSetting, null);
         }
