@@ -128,6 +128,7 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
             "UTLTE", "UTWiFi"};
 
     private TelephonyMetrics mMetrics;
+    private boolean mCarrierConfigLoaded = false;
 
     private BroadcastReceiver mReceiver = new BroadcastReceiver() {
         @Override
@@ -212,6 +213,7 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
                     log("onReceive : Updating mAllowEmergencyVideoCalls = " +
                             mAllowEmergencyVideoCalls);
                 }
+                mCarrierConfigLoaded  = true;
             }
         }
     };
@@ -707,7 +709,9 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
                     mPhone.getExternalCallTracker().getExternalCallStateListener());
         }
 
-        mImsManager.updateImsServiceConfigForSlot(true);
+        if (mCarrierConfigLoaded) {
+            mImsManager.updateImsServiceConfigForSlot(true);
+        }
     }
 
     private void stopListeningForCalls() {
@@ -3166,8 +3170,8 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
         boolean isActiveCallVideo = activeCall.isVideoCall() ||
                 (mTreatDowngradedVideoCallsAsVideoCalls && activeCall.wasVideoCall());
         boolean isActiveCallOnWifi = activeCall.isWifiCall();
-        boolean isVoWifiEnabled = mImsManager.isWfcEnabledByPlatform(mPhone.getContext()) &&
-                mImsManager.isWfcEnabledByUser(mPhone.getContext());
+        boolean isVoWifiEnabled = mImsManager.isWfcEnabledByPlatformForSlot() &&
+                mImsManager.isWfcEnabledByUserForSlot();
         boolean isIncomingCallAudio = !incomingCall.isVideoCall();
         log("shouldDisconnectActiveCallOnAnswer : isActiveCallVideo=" + isActiveCallVideo +
                 " isActiveCallOnWifi=" + isActiveCallOnWifi + " isIncomingCallAudio=" +

@@ -578,7 +578,6 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
                 if (mImsMgr.isDynamicBinding() || mImsMgr.isServiceAvailable()) {
                     mImsServiceReady = true;
                     updateImsPhone();
-                    mImsMgr.updateImsServiceConfigForSlot(false);
                 }
             }
         }
@@ -3481,7 +3480,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
     public void checkWfcWifiOnlyModeBeforeDial()
             throws CallStateException {
-        if (mImsPhone == null || !isWifiCallingEnabled() && mImsMgr != null) {
+        if ((mImsPhone == null || !isWifiCallingEnabled()) && mImsMgr != null) {
             boolean wfcWiFiOnly = (mImsMgr.isWfcEnabledByPlatformForSlot() &&
                     mImsMgr.isWfcEnabledByUserForSlot() &&
                     (mImsMgr.getWfcModeForSlot() ==
