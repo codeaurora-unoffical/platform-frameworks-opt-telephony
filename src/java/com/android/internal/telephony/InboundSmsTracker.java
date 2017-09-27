@@ -23,6 +23,7 @@ import com.android.internal.util.HexDump;
 
 import java.util.Arrays;
 import java.util.Date;
+import android.telephony.Rlog;
 
 /**
  * Tracker for an incoming SMS message ready to broadcast to listeners.
@@ -49,6 +50,7 @@ public class InboundSmsTracker {
     // Fields for deleting this message after delivery
     private String mDeleteWhere;
     private String[] mDeleteWhereArgs;
+    private boolean mIsUndeliverMsg = false;
 
     /** Destination port flag bit for no destination port. */
     private static final int DEST_PORT_FLAG_NO_PORT = (1 << 16);
@@ -129,6 +131,7 @@ public class InboundSmsTracker {
      * @param cursor a Cursor pointing to the row to construct this SmsTracker for
      */
     public InboundSmsTracker(Cursor cursor, boolean isCurrentFormat3gpp2) {
+        Rlog.d("InboundSmsTracker", " Cusrsor constructor");
         mPdu = HexDump.hexStringToByteArray(cursor.getString(InboundSmsHandler.PDU_COLUMN));
 
         if (cursor.isNull(InboundSmsHandler.DESTINATION_PORT_COLUMN)) {
@@ -150,19 +153,20 @@ public class InboundSmsTracker {
 
         mTimestamp = cursor.getLong(InboundSmsHandler.DATE_COLUMN);
         mAddress = cursor.getString(InboundSmsHandler.ADDRESS_COLUMN);
-
-        if (cursor.isNull(InboundSmsHandler.COUNT_COLUMN)) {
+        mMessageCount = cursor.getInt(InboundSmsHandler.COUNT_COLUMN);
+        Rlog.d("InboundSmsTracker", "mMessageCount: " + mMessageCount);
+        if (mMessageCount == 1) {
+            Rlog.d("InboundSmsTracker", "Single part message");
             // single-part message
             long rowId = cursor.getLong(InboundSmsHandler.ID_COLUMN);
             mReferenceNumber = -1;
             mSequenceNumber = getIndexOffset();     // 0 or 1, depending on type
-            mMessageCount = 1;
-            mDeleteWhere = InboundSmsHandler.SELECT_BY_ID;
+            mDeleteWhere = "_id=? AND deleted=0";//InboundSmsHandler.SELECT_BY_ID; 
             mDeleteWhereArgs = new String[]{Long.toString(rowId)};
         } else {
+            Rlog.d("InboundSmsTracker", "Multipat message");
             // multi-part message
             mReferenceNumber = cursor.getInt(InboundSmsHandler.REFERENCE_NUMBER_COLUMN);
-            mMessageCount = cursor.getInt(InboundSmsHandler.COUNT_COLUMN);
 
             // GSM sequence numbers start at 1; CDMA WDP datagram sequence numbers start at 0
             mSequenceNumber = cursor.getInt(InboundSmsHandler.SEQUENCE_COLUMN);
@@ -178,6 +182,7 @@ public class InboundSmsTracker {
                     Integer.toString(mReferenceNumber), Integer.toString(mMessageCount)};
         }
         mMessageBody = cursor.getString(InboundSmsHandler.MESSAGE_BODY_COLUMN);
+        mIsUndeliverMsg = true;
     }
 
     public ContentValues getContentValues() {
@@ -309,5 +314,9 @@ public class InboundSmsTracker {
 
     public String[] getDeleteWhereArgs() {
         return mDeleteWhereArgs;
+    }
+
+    public boolean isDupCheckRequired() {
+        return mIsUndeliverMsg;
     }
 }

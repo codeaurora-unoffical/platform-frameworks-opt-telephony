@@ -103,7 +103,7 @@ import java.util.List;
  */
 public abstract class InboundSmsHandler extends StateMachine {
     protected static final boolean DBG = true;
-    private static final boolean VDBG = false; // STOPSHIP if true, logs user data
+    private static final boolean VDBG = true; // STOPSHIP if true, logs user data
 
     /** Query projection for checking for duplicate message segments. */
     private static final String[] PDU_PROJECTION = {
@@ -778,6 +778,32 @@ public abstract class InboundSmsHandler extends StateMachine {
         int messageCount = tracker.getMessageCount();
         byte[][] pdus;
         int destPort = tracker.getDestPort();
+        loge("processMessagePart: duplicate checking, " + tracker);
+        loge("processMessagePart: duplicate checking, isDupCheckRequired: " + tracker.isDupCheckRequired());
+        loge("processMessagePart: duplicate checking, DeleteWhere: " + tracker.getDeleteWhere());
+        loge("processMessagePart: duplicate checking, " + tracker.getDeleteWhereArgs());
+        String[] whereArgs1 = tracker.getDeleteWhereArgs();
+        int size = whereArgs1.length;
+        for ( int i = 0; i < size; i++ ) {
+            loge("processMessagePart: duplicate checking, WhereArgs: " + whereArgs1[i]);
+        }
+
+        if (tracker.isDupCheckRequired()) {
+            Cursor cursor = null;
+            boolean processMsg= true;
+            cursor = mResolver.query(sRawUri, null, tracker.getDeleteWhere(), tracker.getDeleteWhereArgs(), null);
+            if (!cursor.moveToNext()) {
+                processMsg = false;
+            }
+            loge("processMessagePart procedd: " + processMsg);
+            if (cursor != null) {
+                    cursor.close();
+                }
+            if(!processMsg) {
+                return false;
+            }
+            loge("processMessagePart: END of duplicate checking");
+        }
 
         if (messageCount == 1) {
             // single-part message

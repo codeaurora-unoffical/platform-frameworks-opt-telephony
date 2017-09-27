@@ -42,7 +42,7 @@ import java.util.HashSet;
  */
 public class SmsBroadcastUndelivered {
     private static final String TAG = "SmsBroadcastUndelivered";
-    private static final boolean DBG = InboundSmsHandler.DBG;
+    private static final boolean DBG = true;//InboundSmsHandler.DBG;
 
     /** Delete any partial message segments older than 30 days. */
     static final long PARTIAL_SEGMENT_EXPIRE_AGE = (long) (60 * 60 * 1000) * 24 * 30;
