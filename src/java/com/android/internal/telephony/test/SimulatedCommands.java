@@ -1008,6 +1008,7 @@ public class SimulatedCommands extends BaseCommands
      */
     @Override
     public void startDtmf(char c, Message result) {
+        SimulatedCommandsVerifier.getInstance().startDtmf(c, result);
         resultSuccess(result, null);
     }
 
@@ -1744,8 +1745,8 @@ public class SimulatedCommands extends BaseCommands
         Rlog.i(LOG_TAG, "[SimCmd] supplyIccPinForApp: pin failed!");
         CommandException ex = new CommandException(
                 CommandException.Error.PASSWORD_INCORRECT);
-        resultFail(response, new int[]{
-                (--mPin1attemptsRemaining < 0) ? 0 : mPin1attemptsRemaining}, ex);
+        resultFail(response, new Integer(
+                (--mPin1attemptsRemaining < 0) ? 0 : mPin1attemptsRemaining), ex);
     }
 
     @Override
