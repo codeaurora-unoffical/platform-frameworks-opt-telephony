@@ -1989,6 +1989,16 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
         return code;
     }
 
+    @VisibleForTesting
+    public boolean getSwitchingFgAndBgCallsValue() {
+        return mSwitchingFgAndBgCalls;
+    }
+
+    @VisibleForTesting
+    public void setSwitchingFgAndBgCallsValue(boolean value) {
+        mSwitchingFgAndBgCalls = value;
+    }
+
     /**
      * Maps an {@link ImsReasonInfo} reason code to a {@link DisconnectCause} cause code.
      * The {@link Call.State} provided is the state of the call prior to disconnection.
@@ -2669,6 +2679,8 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
             // We should move this into the InCallService so that it is handled appropriately
             // based on the user facing UI.
             mPhone.notifySuppServiceFailed(Phone.SuppService.CONFERENCE);
+
+            call.resetIsMergeRequestedByConf(false);
 
             // Start plumbing this even through Telecom so other components can take
             // appropriate action.
