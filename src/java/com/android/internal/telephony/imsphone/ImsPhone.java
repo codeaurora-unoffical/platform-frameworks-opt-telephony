@@ -1758,9 +1758,6 @@ public class ImsPhone extends ImsPhoneBase {
                     messageNotification = wfcOperatorErrorNotificationMessages[idx];
                 }
 
-                // UX requirement is to disable WFC in case of "permanent" registration failures.
-                ImsManager.getInstance(mContext, mPhoneId).setWfcSettingForSlot(false);
-
                 // If WfcSettings are active then alert will be shown
                 // otherwise notification will be added.
                 Intent intent = new Intent(ImsManager.ACTION_IMS_REGISTRATION_ERROR);
