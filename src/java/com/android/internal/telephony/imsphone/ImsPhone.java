@@ -62,6 +62,7 @@ import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.telecom.VideoProfile;
 import android.telephony.CarrierConfigManager;
+import android.telephony.ims.feature.ImsFeature;
 import android.telephony.PhoneNumberUtils;
 import android.telephony.Rlog;
 import android.telephony.ServiceState;
@@ -1812,9 +1813,6 @@ public class ImsPhone extends ImsPhoneBase {
                         imsReasonInfo.mExtraMessage); // Fill IMS error code into notification
             }
 
-            // UX requirement is to disable WFC in case of "permanent" registration failures.
-            ImsManager.getInstance(mContext, mPhoneId).setWfcSettingForSlot(false);
-
             // If WfcSettings are active then alert will be shown
             // otherwise notification will be added.
             Intent intent = new Intent(ImsManager.ACTION_IMS_REGISTRATION_ERROR);
@@ -1832,7 +1830,13 @@ public class ImsPhone extends ImsPhoneBase {
 
     @Override
     public boolean isUtEnabled() {
-        return mCT.isUtEnabled();
+        int imsFeatureState = ImsFeature.STATE_NOT_AVAILABLE;
+        try {
+            imsFeatureState = ImsManager.getInstance(mContext, mPhoneId).getImsServiceStatus();
+        } catch (ImsException ex) {
+            Rlog.d(LOG_TAG,  "Exception when trying to get ImsServiceStatus: " + ex);
+        }
+        return mCT.isUtEnabled() && (imsFeatureState == ImsFeature.STATE_READY);
     }
 
     @Override
