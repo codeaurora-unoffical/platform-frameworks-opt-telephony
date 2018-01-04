@@ -106,6 +106,7 @@ public class TelephonyNetworkFactoryTest extends AndroidTestCase {
             subscriptionControllerMock =
                     new SubscriptionControllerMock(contextMock, telephonyRegistryMock, numPhones);
             subscriptionMonitorMock = new SubscriptionMonitorMock(numPhones);
+            subscriptionControllerMock.setActiveSubInfoCount(numPhones);
         }
 
         void die() {
