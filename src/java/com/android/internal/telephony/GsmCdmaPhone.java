@@ -241,7 +241,9 @@ public class GsmCdmaPhone extends Phone {
         public void onReceive(Context context, Intent intent) {
             Rlog.d(LOG_TAG, "mBroadcastReceiver: action " + intent.getAction());
             if (intent.getAction().equals(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED) &&
-                    intent.getExtras().getInt(PhoneConstants.PHONE_KEY) == mPhoneId) {
+                    intent.getExtras() != null &&
+                    intent.getExtras().getInt(CarrierConfigManager.EXTRA_SLOT_INDEX,
+                    SubscriptionManager.INVALID_SIM_SLOT_INDEX) == mPhoneId) {
                 sendMessage(obtainMessage(EVENT_CARRIER_CONFIG_CHANGED));
             }
         }
@@ -1867,9 +1869,7 @@ public class GsmCdmaPhone extends Phone {
             int serviceClass) {
         if (isPhoneTypeGsm()) {
             Phone imsPhone = mImsPhone;
-            if ((imsPhone != null)
-                    && ((imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE)
-                    || imsPhone.isUtEnabled())) {
+            if ((imsPhone != null) && imsPhone.isUtEnabled()) {
                 imsPhone.getCallBarring(facility, password, onComplete, serviceClass);
                 return;
             }
@@ -1884,9 +1884,7 @@ public class GsmCdmaPhone extends Phone {
             Message onComplete, int serviceClass) {
         if (isPhoneTypeGsm()) {
             Phone imsPhone = mImsPhone;
-            if ((imsPhone != null)
-                    && ((imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE)
-                    || imsPhone.isUtEnabled())) {
+            if ((imsPhone != null) && imsPhone.isUtEnabled()) {
                 imsPhone.setCallBarring(facility, lockState, password, onComplete, serviceClass);
                 return;
             }
