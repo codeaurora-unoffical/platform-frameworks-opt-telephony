@@ -762,7 +762,7 @@ public class ImsPhoneConnection extends Connection implements
                 Rlog.d(LOG_TAG, "address = " + Rlog.pii(LOG_TAG, address) + " name = " + name +
                         " nump = " + nump + " namep = " + namep);
             }
-            if(equalsHandlesNulls(mAddress, address)) {
+            if(!equalsHandlesNulls(mAddress, address)) {
                 mAddress = address;
                 changed = true;
             }
