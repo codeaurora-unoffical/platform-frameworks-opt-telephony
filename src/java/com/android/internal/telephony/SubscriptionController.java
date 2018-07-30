@@ -210,7 +210,9 @@ public class SubscriptionController extends ISub.Stub {
     }
 
     private boolean isSubInfoReady() {
-        return sSlotIndexToSubId.size() > 0;
+        return sSlotIndexToSubId.size() > 0
+                && mCacheActiveSubInfoList.get() != null
+                && sSlotIndexToSubId.size() == mCacheActiveSubInfoList.get().size();
     }
 
     private SubscriptionController(Phone phone) {
@@ -624,14 +626,6 @@ public class SubscriptionController extends ISub.Stub {
         // Now that all security checks passes, perform the operation as ourselves.
         final long identity = Binder.clearCallingIdentity();
         try {
-            if (!isSubInfoReady()) {
-                if (DBG_CACHE) {
-                    logdl("[refreshCachedActiveSubscriptionInfoList] "
-                            + "Sub Controller not ready ");
-                }
-                return;
-            }
-
             List<SubscriptionInfo> subList = getSubInfo(
                     SubscriptionManager.SIM_SLOT_INDEX + ">=0", null);
 
@@ -932,9 +926,6 @@ public class SubscriptionController extends ISub.Stub {
                         resolver.update(SubscriptionManager.CONTENT_URI, value,
                                 SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID +
                                         "=" + Long.toString(subId), null);
-
-                        // Refresh the Cache of Active Subscription Info List
-                        refreshCachedActiveSubscriptionInfoList();
                     }
 
                     if (DBG) logdl("[addSubInfoRecord] Record already exists");
@@ -1028,11 +1019,11 @@ public class SubscriptionController extends ISub.Stub {
                         SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID +
                                 "=" + Long.toString(subId), null);
 
-                // Refresh the Cache of Active Subscription Info List
-                refreshCachedActiveSubscriptionInfoList();
-
                 if (DBG) logdl("[addSubInfoRecord] sim name = " + nameToSet);
             }
+
+            // Refresh the Cache of Active Subscription Info List
+            refreshCachedActiveSubscriptionInfoList();
 
             // Once the records are loaded, notify DcTracker
             sPhones[slotIndex].updateDataConnectionTracker();
@@ -1065,9 +1056,6 @@ public class SubscriptionController extends ISub.Stub {
         value.put(SubscriptionManager.CARRIER_NAME, "");
 
         Uri uri = resolver.insert(SubscriptionManager.CONTENT_URI, value);
-
-        // Refresh the Cache of Active Subscription Info List
-        refreshCachedActiveSubscriptionInfoList();
 
         return uri;
     }
