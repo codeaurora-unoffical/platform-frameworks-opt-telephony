@@ -859,4 +859,12 @@ public class SubscriptionInfoUpdater extends Handler {
         pw.println("SubscriptionInfoUpdater:");
         mCarrierServiceBindHelper.dump(fd, pw, args);
     }
+
+    String getIccIdFromPhoneId(int phoneId) {
+        if (phoneId >= 0 && phoneId < PROJECT_SIM_NUM) {
+            return mIccId[phoneId];
+        } else {
+            return null;
+        }
+    }
 }
