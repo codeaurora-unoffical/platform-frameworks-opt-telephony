@@ -756,12 +756,12 @@ public class GsmCdmaPhone extends Phone {
         }
         String iccId = (r != null) ? r.getFullIccId() : null;
         int subId = getSubId();
-        if (TextUtils.isEmpty(iccId) && SubscriptionController.getInstance().isActiveSubId(subId)) {
-            SubscriptionInfo subInfo = SubscriptionManager.from(getContext())
-                    .getActiveSubscriptionInfo(subId);
-            if (subInfo != null) {
-                iccId = subInfo.getIccId();
-            }
+        int phoneId = getPhoneId();
+        if (TextUtils.isEmpty(iccId) && SubscriptionController.getInstance()
+                .isActiveSubId(subId)) {
+            SubscriptionInfoUpdater subscriptionInfoUpdater =
+                    PhoneFactory.getSubscriptionInfoUpdater();
+            iccId = subscriptionInfoUpdater.getIccIdFromPhoneId(phoneId);
         }
 
         return iccId;
