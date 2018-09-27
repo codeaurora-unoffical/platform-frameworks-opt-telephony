@@ -1102,9 +1102,10 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
         CarrierConfigManager carrierConfigManager = (CarrierConfigManager)
                 mPhone.getContext().getSystemService(Context.CARRIER_CONFIG_SERVICE);
         if (carrierConfigManager == null ||
-                !SubscriptionController.getInstance().isActiveSubId(subId)) {
-            loge("cacheCarrierConfiguration: No carrier config service found" + " " +
-                    "or not active subId = " + subId);
+                !SubscriptionController.getInstance().isActiveSubId(subId) ||
+                !mPhone.getDefaultPhone().getIccRecordsLoaded()) {
+            loge("cacheCarrierConfiguration: No carrier config service found or records not" +
+                    " loaded or not active subId = " + subId);
             mCarrierConfigLoaded = false;
             return;
         }
