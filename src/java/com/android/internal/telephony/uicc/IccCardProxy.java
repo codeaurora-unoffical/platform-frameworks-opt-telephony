@@ -158,7 +158,17 @@ public class IccCardProxy extends Handler implements IccCard {
             if (ServiceState.isGsm(radioTech)) {
                 mCurrentAppType = UiccController.APP_FAM_3GPP;
             } else {
-                mCurrentAppType = UiccController.APP_FAM_3GPP2;
+                //if CSIM application is not present, set current app to default app i.e 3GPP
+                UiccCard newCard = mUiccController.getUiccCard(mPhoneId);
+                UiccCardApplication newApp = null;
+                if (newCard != null) {
+                    newApp = newCard.getApplication(UiccController.APP_FAM_3GPP2);
+                    if(newApp != null) {
+                        mCurrentAppType = UiccController.APP_FAM_3GPP2;
+                    } else {
+                        mCurrentAppType = UiccController.APP_FAM_3GPP;
+                    }
+                }
             }
             updateQuietMode();
         }
