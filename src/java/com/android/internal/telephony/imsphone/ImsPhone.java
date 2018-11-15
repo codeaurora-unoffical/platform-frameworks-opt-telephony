@@ -1034,7 +1034,7 @@ public class ImsPhone extends ImsPhoneBase {
     }
 
     public void getCallBarring(String facility, Message onComplete) {
-        getCallBarring(facility, CommandsInterface.SERVICE_CLASS_NONE, onComplete);
+        getCallBarring(facility, CommandsInterface.SERVICE_CLASS_VOICE, onComplete);
     }
 
     public void getCallBarring(String facility, int serviceClass, Message onComplete) {
@@ -1053,7 +1053,7 @@ public class ImsPhone extends ImsPhoneBase {
 
     public void setCallBarring(String facility, boolean lockState, String password, Message
             onComplete) {
-        setCallBarring(facility, lockState, CommandsInterface.SERVICE_CLASS_NONE,
+        setCallBarring(facility, lockState, CommandsInterface.SERVICE_CLASS_VOICE,
                 password, onComplete);
     }
 
