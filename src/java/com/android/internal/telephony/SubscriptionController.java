@@ -921,10 +921,17 @@ public class SubscriptionController extends ISub.Stub {
      */
     @Override
     public int addSubInfoRecord(String iccId, int slotIndex) {
-        String fullIccId = iccId;
+        String fullIccId;
         Phone phone = PhoneFactory.getPhone(slotIndex);
-        if (phone != null) {
+        UiccCard uiccCard = UiccController.getInstance().getUiccCardForSlot(slotIndex);
+        if (phone != null && uiccCard != null) {
             fullIccId = phone.getFullIccSerialNumber();
+            if (TextUtils.isEmpty(fullIccId)) {
+                fullIccId = iccId;
+            }
+        } else {
+            if (DBG) logdl("[addSubInfoRecord]- null fullIccId");
+            return -1;
         }
 
         if (DBG) logdl("[addSubInfoRecord]+ iccId:" + SubscriptionInfo.givePrintableIccid(iccId) +
@@ -957,6 +964,23 @@ public class SubscriptionController extends ISub.Stub {
                     Uri uri = insertEmptySubInfoRecord(iccId, slotIndex);
                     if (DBG) logdl("[addSubInfoRecord] New record created: " + uri);
                 } else {
+                    if (cursor.getCount() > 1) {
+                        String iccId1 = cursor.getString(3);
+                        while(cursor.moveToNext()) {
+                            String iccId2 = cursor.getString(3);
+                            int subId2 = cursor.getInt(0);
+                            if (iccId1.equals(iccId2)) {
+                                resolver.delete(SubscriptionManager.CONTENT_URI,
+                                        SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID +
+                                        "=?",new String[]{Long.toString(subId2)});
+                            } else {
+                                resolver.delete(SubscriptionManager.CONTENT_URI,
+                                        SubscriptionManager.ICC_ID + "=?",new String[]{iccId2});
+                            }
+                        }
+                        cursor.moveToFirst();
+                    }
+
                     int subId = cursor.getInt(0);
                     int oldSimInfoId = cursor.getInt(1);
                     int nameSource = cursor.getInt(2);
@@ -974,7 +998,7 @@ public class SubscriptionController extends ISub.Stub {
 
                     if (oldIccId != null && oldIccId.length() != iccId.length()
                            && (oldIccId.equals(IccUtils.getDecimalSubstring(iccId))
-                                    || iccId.equals(IccUtils.stripTrailingFs(oldIccId)))) {
+                           || iccId.equalsIgnoreCase(IccUtils.stripTrailingFs(oldIccId)))) {
                         value.put(SubscriptionManager.ICC_ID, iccId);
                     }
 
