@@ -858,6 +858,12 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
             if (mImsManager != null && mServiceId > 0) {
                 mImsManager.close(mServiceId);
                 mServiceId = -1;
+                mPhone.setServiceState(ServiceState.STATE_OUT_OF_SERVICE);
+                mPhone.setImsRegistered(false);
+                ImsReasonInfo imsReasonInfo = new ImsReasonInfo(
+                        ImsReasonInfo.CODE_REGISTRATION_ERROR,
+                        ImsReasonInfo.CODE_UNSPECIFIED, null);
+                mPhone.processDisconnectReason(imsReasonInfo);
             }
         } catch (ImsException e) {
             // If the binder is unavailable, then the ImsService doesn't need to close.
