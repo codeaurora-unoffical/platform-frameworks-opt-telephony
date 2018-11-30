@@ -3607,6 +3607,29 @@ public class DcTracker extends Handler {
             loge("mAllApnSettings is null!");
         }
 
+        if (requestedApnType.equals(PhoneConstants.APN_TYPE_DEFAULT) && mPreferredApn == null) {
+            ApnContext apnContext = mApnContextsById.get(DctConstants.APN_DEFAULT_ID);
+            // If restored to default APN, the APN ID might be changed.
+            // Here reset with the same APN added newly.
+            if (apnContext != null && apnContext.getApnSetting() != null) {
+                ArrayList<ApnSetting> currentWaitingApns = apnContext.getWaitingApns();
+                if (currentWaitingApns != null && apnList.size() == currentWaitingApns.size()) {
+                    for (ApnSetting apnSetting : apnList) {
+                        if (apnSetting.equals(apnContext.getApnSetting(),
+                                mPhone.getServiceState().getDataRoamingFromRegistration())) {
+                            if (DBG) log("buildWaitingApns: reset preferred APN to "
+                                    + apnSetting);
+                            apnContext.setWaitingApns(apnList);
+                            mPreferredApn = apnSetting;
+                            apnContext.setApnSetting(apnSetting);
+                            setPreferredApn(mPreferredApn.id);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         apnList = sortApnListByPreferred(apnList);
         if (DBG) log("buildWaitingApns: " + apnList.size() + " APNs in the list: " + apnList);
         return apnList;
