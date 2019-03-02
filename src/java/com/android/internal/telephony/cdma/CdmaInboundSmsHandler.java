@@ -244,6 +244,8 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
         }
         // update voice mail count in phone
         mPhone.setVoiceMessageCount(voicemailCount);
+        // update metrics
+        addVoicemailSmsToMetrics();
     }
 
     /**
@@ -299,8 +301,8 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
         // pass the user data portion of the PDU to the shared handler in SMSDispatcher
         byte[] userData = new byte[pdu.length - index];
         System.arraycopy(pdu, index, userData, 0, pdu.length - index);
-
-        InboundSmsTracker tracker = TelephonyComponentFactory.getInstance().makeInboundSmsTracker(
+        InboundSmsTracker tracker = TelephonyComponentFactory.getInstance()
+                .inject(InboundSmsTracker.class.getName()).makeInboundSmsTracker(
                 userData, timestamp, destinationPort, true, address, dispAddr, referenceNumber,
                 segment, totalSegments, true, HexDump.toHexString(userData));
 
@@ -341,5 +343,13 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
 
         String mimeType = pduDecoder.getValueString();
         return (WspTypeDecoder.CONTENT_TYPE_B_PUSH_SYNCML_NOTI.equals(mimeType));
+    }
+
+    /**
+     * Add voicemail indication SMS 0 to metrics.
+     */
+    private void addVoicemailSmsToMetrics() {
+        mMetrics.writeIncomingVoiceMailSms(mPhone.getPhoneId(),
+                android.telephony.SmsMessage.FORMAT_3GPP2);
     }
 }

@@ -31,6 +31,7 @@ import android.os.Binder;
 import android.os.Bundle;
 import android.os.ServiceManager;
 import android.provider.Settings;
+import android.service.euicc.DownloadSubscriptionResult;
 import android.service.euicc.EuiccService;
 import android.service.euicc.GetDefaultDownloadableSubscriptionListResult;
 import android.service.euicc.GetDownloadableSubscriptionMetadataResult;
@@ -39,6 +40,7 @@ import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.telephony.UiccAccessRule;
+import android.telephony.UiccCardInfo;
 import android.telephony.euicc.DownloadableSubscription;
 import android.telephony.euicc.EuiccInfo;
 import android.telephony.euicc.EuiccManager;
@@ -78,6 +80,7 @@ public class EuiccController extends IEuiccController.Stub {
     private final Context mContext;
     private final EuiccConnector mConnector;
     private final SubscriptionManager mSubscriptionManager;
+    private final TelephonyManager mTelephonyManager;
     private final AppOpsManager mAppOpsManager;
     private final PackageManager mPackageManager;
 
@@ -116,6 +119,8 @@ public class EuiccController extends IEuiccController.Stub {
         mConnector = connector;
         mSubscriptionManager = (SubscriptionManager)
                 context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+        mTelephonyManager = (TelephonyManager)
+                context.getSystemService(Context.TELEPHONY_SERVICE);
         mAppOpsManager = (AppOpsManager) context.getSystemService(Context.APP_OPS_SERVICE);
         mPackageManager = context.getPackageManager();
     }
@@ -134,7 +139,7 @@ public class EuiccController extends IEuiccController.Stub {
      * </UL>
      */
     @Override
-    public void continueOperation(Intent resolutionIntent, Bundle resolutionExtras) {
+    public void continueOperation(int cardId, Intent resolutionIntent, Bundle resolutionExtras) {
         if (!callerCanWriteEmbeddedSubscriptions()) {
             throw new SecurityException(
                     "Must have WRITE_EMBEDDED_SUBSCRIPTIONS to continue operation");
@@ -149,7 +154,7 @@ public class EuiccController extends IEuiccController.Stub {
             PendingIntent callbackIntent =
                     resolutionIntent.getParcelableExtra(
                             EuiccManager.EXTRA_EMBEDDED_SUBSCRIPTION_RESOLUTION_CALLBACK_INTENT);
-            op.continueOperation(resolutionExtras, callbackIntent);
+            op.continueOperation(cardId, resolutionExtras, callbackIntent);
         } finally {
             Binder.restoreCallingIdentity(token);
         }
@@ -163,15 +168,16 @@ public class EuiccController extends IEuiccController.Stub {
      * operation.
      */
     @Override
-    public String getEid() {
+    public String getEid(int cardId, String callingPackage) {
         if (!callerCanReadPhoneStatePrivileged()
-                && !callerHasCarrierPrivilegesForActiveSubscription()) {
+                && !canManageActiveSubscriptionOnTargetSim(cardId, callingPackage)) {
             throw new SecurityException(
-                    "Must have carrier privileges on active subscription to read EID");
+                    "Must have carrier privileges on active subscription to read EID for cardId="
+                    + cardId);
         }
         long token = Binder.clearCallingIdentity();
         try {
-            return blockingGetEidFromEuiccService();
+            return blockingGetEidFromEuiccService(cardId);
         } finally {
             Binder.restoreCallingIdentity(token);
         }
@@ -184,27 +190,37 @@ public class EuiccController extends IEuiccController.Stub {
      * that IPC should generally be fast.
      */
     @Override
-    public @OtaStatus int getOtaStatus() {
+    public @OtaStatus int getOtaStatus(int cardId) {
         if (!callerCanWriteEmbeddedSubscriptions()) {
             throw new SecurityException("Must have WRITE_EMBEDDED_SUBSCRIPTIONS to get OTA status");
         }
         long token = Binder.clearCallingIdentity();
         try {
-            return blockingGetOtaStatusFromEuiccService();
+            return blockingGetOtaStatusFromEuiccService(cardId);
         } finally {
             Binder.restoreCallingIdentity(token);
         }
     }
 
-
     /**
-     * Start eUICC OTA update if current eUICC OS is not the latest one. When OTA is started or
-     * finished, the broadcast {@link EuiccManager#ACTION_OTA_STATUS_CHANGED} will be sent.
+     * Start eUICC OTA update on the default eUICC if current eUICC OS is not the latest one. When
+     * OTA is started or finished, the broadcast {@link EuiccManager#ACTION_OTA_STATUS_CHANGED} will
+     * be sent.
      *
      * This function will only be called from phone process and isn't exposed to the other apps.
+     *
+     * (see {@link #startOtaUpdatingIfNecessary(int cardId)}).
      */
     public void startOtaUpdatingIfNecessary() {
-        mConnector.startOtaIfNecessary(
+        // TODO(b/120796772) Eventually, we should use startOtaUpdatingIfNecessary(cardId)
+        startOtaUpdatingIfNecessary(mTelephonyManager.getCardIdForDefaultEuicc());
+    }
+
+    /**
+     * Start eUICC OTA update on the given eUICC if current eUICC OS is not the latest one.
+     */
+    public void startOtaUpdatingIfNecessary(int cardId) {
+        mConnector.startOtaIfNecessary(cardId,
                 new OtaStatusChangedCallback() {
                     @Override
                     public void onOtaStatusChanged(int status) {
@@ -217,13 +233,14 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Override
-    public void getDownloadableSubscriptionMetadata(DownloadableSubscription subscription,
-            String callingPackage, PendingIntent callbackIntent) {
-        getDownloadableSubscriptionMetadata(
+    public void getDownloadableSubscriptionMetadata(int cardId,
+            DownloadableSubscription subscription, String callingPackage,
+            PendingIntent callbackIntent) {
+        getDownloadableSubscriptionMetadata(cardId,
                 subscription, false /* forceDeactivateSim */, callingPackage, callbackIntent);
     }
 
-    void getDownloadableSubscriptionMetadata(DownloadableSubscription subscription,
+    void getDownloadableSubscriptionMetadata(int cardId, DownloadableSubscription subscription,
             boolean forceDeactivateSim, String callingPackage, PendingIntent callbackIntent) {
         if (!callerCanWriteEmbeddedSubscriptions()) {
             throw new SecurityException("Must have WRITE_EMBEDDED_SUBSCRIPTIONS to get metadata");
@@ -231,7 +248,7 @@ public class EuiccController extends IEuiccController.Stub {
         mAppOpsManager.checkPackage(Binder.getCallingUid(), callingPackage);
         long token = Binder.clearCallingIdentity();
         try {
-            mConnector.getDownloadableSubscriptionMetadata(
+            mConnector.getDownloadableSubscriptionMetadata(cardId,
                     subscription, forceDeactivateSim,
                     new GetMetadataCommandCallback(
                             token, subscription, callingPackage, callbackIntent));
@@ -258,7 +275,7 @@ public class EuiccController extends IEuiccController.Stub {
         }
 
         @Override
-        public void onGetMetadataComplete(
+        public void onGetMetadataComplete(int cardId,
                 GetDownloadableSubscriptionMetadataResult result) {
             Intent extrasIntent = new Intent();
             final int resultCode;
@@ -274,8 +291,10 @@ public class EuiccController extends IEuiccController.Stub {
                     addResolutionIntent(extrasIntent,
                             EuiccService.ACTION_RESOLVE_DEACTIVATE_SIM,
                             mCallingPackage,
+                            0 /* resolvableErrors */,
                             false /* confirmationCodeRetried */,
-                            getOperationForDeactivateSim());
+                            getOperationForDeactivateSim(),
+                            cardId);
                     break;
                 default:
                     resultCode = ERROR;
@@ -300,15 +319,16 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Override
-    public void downloadSubscription(DownloadableSubscription subscription,
-            boolean switchAfterDownload, String callingPackage, PendingIntent callbackIntent) {
-        downloadSubscription(subscription, switchAfterDownload, callingPackage,
-                false /* forceDeactivateSim */, callbackIntent);
+    public void downloadSubscription(int cardId, DownloadableSubscription subscription,
+            boolean switchAfterDownload, String callingPackage, Bundle resolvedBundle,
+            PendingIntent callbackIntent) {
+        downloadSubscription(cardId, subscription, switchAfterDownload, callingPackage,
+                false /* forceDeactivateSim */, resolvedBundle, callbackIntent);
     }
 
-    void downloadSubscription(DownloadableSubscription subscription,
+    void downloadSubscription(int cardId, DownloadableSubscription subscription,
             boolean switchAfterDownload, String callingPackage, boolean forceDeactivateSim,
-            PendingIntent callbackIntent) {
+            Bundle resolvedBundle, PendingIntent callbackIntent) {
         boolean callerCanWriteEmbeddedSubscriptions = callerCanWriteEmbeddedSubscriptions();
         mAppOpsManager.checkPackage(Binder.getCallingUid(), callingPackage);
 
@@ -317,13 +337,13 @@ public class EuiccController extends IEuiccController.Stub {
             if (callerCanWriteEmbeddedSubscriptions) {
                 // With WRITE_EMBEDDED_SUBSCRIPTIONS, we can skip profile-specific permission checks
                 // and move straight to the profile download.
-                downloadSubscriptionPrivileged(token, subscription, switchAfterDownload,
-                        forceDeactivateSim, callingPackage, callbackIntent);
+                downloadSubscriptionPrivileged(cardId, token, subscription, switchAfterDownload,
+                        forceDeactivateSim, callingPackage, resolvedBundle, callbackIntent);
                 return;
             }
             // Without WRITE_EMBEDDED_SUBSCRIPTIONS, the caller *must* be whitelisted per the
             // metadata of the profile to be downloaded, so check the metadata first.
-            mConnector.getDownloadableSubscriptionMetadata(subscription,
+            mConnector.getDownloadableSubscriptionMetadata(cardId, subscription,
                     forceDeactivateSim,
                     new DownloadSubscriptionGetMetadataCommandCallback(token, subscription,
                             switchAfterDownload, callingPackage, forceDeactivateSim,
@@ -347,25 +367,27 @@ public class EuiccController extends IEuiccController.Stub {
         }
 
         @Override
-        public void onGetMetadataComplete(
+        public void onGetMetadataComplete(int cardId,
                 GetDownloadableSubscriptionMetadataResult result) {
             if (result.getResult() == EuiccService.RESULT_MUST_DEACTIVATE_SIM) {
                 // If we need to deactivate the current SIM to even check permissions, go ahead and
                 // require that the user resolve the stronger permission dialog.
                 Intent extrasIntent = new Intent();
                 addResolutionIntent(extrasIntent, EuiccService.ACTION_RESOLVE_NO_PRIVILEGES,
-                        mCallingPackage,
-                        false /* confirmationCodeRetried */,
-                        EuiccOperation.forDownloadNoPrivileges(
-                                mCallingToken, mSubscription, mSwitchAfterDownload,
-                                mCallingPackage));
+                            mCallingPackage,
+                            0 /* resolvableErrors */,
+                            false /* confirmationCodeRetried */,
+                            EuiccOperation.forDownloadNoPrivileges(
+                                    mCallingToken, mSubscription, mSwitchAfterDownload,
+                                    mCallingPackage),
+                            cardId);
                 sendResult(mCallbackIntent, RESOLVABLE_ERROR, extrasIntent);
                 return;
             }
 
             if (result.getResult() != EuiccService.RESULT_OK) {
                 // Just propagate the error as normal.
-                super.onGetMetadataComplete(result);
+                super.onGetMetadataComplete(cardId, result);
                 return;
             }
 
@@ -394,13 +416,19 @@ public class EuiccController extends IEuiccController.Stub {
             for (int i = 0; i < rules.length; i++) {
                 if (rules[i].getCarrierPrivilegeStatus(info)
                         == TelephonyManager.CARRIER_PRIVILEGE_STATUS_HAS_ACCESS) {
-                    // Caller can download this profile. Now, determine whether the caller can also
-                    // manage the current profile; if so, we can perform the download silently; if
-                    // not, the user must provide consent.
-                    if (canManageActiveSubscription(mCallingPackage)) {
-                        downloadSubscriptionPrivileged(
+                    // Caller can download this profile.
+                    // On a multi-active SIM device, if the caller can manage the active
+                    // subscription on the target SIM, or there is no active subscription on the
+                    // target SIM and the caller can manage any active subscription on other SIMs,
+                    // we perform the download silently. Otherwise, the user must provide consent.
+                    // If it's a single-active SIM device, determine whether the caller can manage
+                    // the current profile; if so, we can perform the download silently; if not,
+                    // the user must provide consent.
+                    if (canManageSubscriptionOnTargetSim(cardId, mCallingPackage)) {
+                        downloadSubscriptionPrivileged(cardId,
                                 mCallingToken, subscription, mSwitchAfterDownload,
-                                mForceDeactivateSim, mCallingPackage, mCallbackIntent);
+                                mForceDeactivateSim, mCallingPackage, null /* resolvedBundle */,
+                                mCallbackIntent);
                         return;
                     }
 
@@ -408,10 +436,12 @@ public class EuiccController extends IEuiccController.Stub {
                     Intent extrasIntent = new Intent();
                     addResolutionIntent(extrasIntent, EuiccService.ACTION_RESOLVE_NO_PRIVILEGES,
                             mCallingPackage,
+                            0 /* resolvableErrors */,
                             false /* confirmationCodeRetried */,
                             EuiccOperation.forDownloadNoPrivileges(
                                     mCallingToken, subscription, mSwitchAfterDownload,
-                                    mCallingPackage));
+                                    mCallingPackage),
+                            cardId);
                     sendResult(mCallbackIntent, RESOLVABLE_ERROR, extrasIntent);
                     return;
                 }
@@ -427,20 +457,22 @@ public class EuiccController extends IEuiccController.Stub {
         }
     }
 
-    void downloadSubscriptionPrivileged(final long callingToken,
+    void downloadSubscriptionPrivileged(int cardId, final long callingToken,
             DownloadableSubscription subscription, boolean switchAfterDownload,
-            boolean forceDeactivateSim, final String callingPackage,
+            boolean forceDeactivateSim, final String callingPackage, Bundle resolvedBundle,
             final PendingIntent callbackIntent) {
         mConnector.downloadSubscription(
+                cardId,
                 subscription,
                 switchAfterDownload,
                 forceDeactivateSim,
+                resolvedBundle,
                 new EuiccConnector.DownloadCommandCallback() {
                     @Override
-                    public void onDownloadComplete(int result) {
+                    public void onDownloadComplete(DownloadSubscriptionResult result) {
                         Intent extrasIntent = new Intent();
                         final int resultCode;
-                        switch (result) {
+                        switch (result.getResult()) {
                             case EuiccService.RESULT_OK:
                                 resultCode = OK;
                                 // Now that a profile has been successfully downloaded, mark the
@@ -465,30 +497,50 @@ public class EuiccController extends IEuiccController.Stub {
                                 addResolutionIntent(extrasIntent,
                                         EuiccService.ACTION_RESOLVE_DEACTIVATE_SIM,
                                         callingPackage,
+                                        0 /* resolvableErrors */,
                                         false /* confirmationCodeRetried */,
                                         EuiccOperation.forDownloadDeactivateSim(
                                                 callingToken, subscription, switchAfterDownload,
-                                                callingPackage));
+                                                callingPackage),
+                                        cardId);
                                 break;
-                            case EuiccService.RESULT_NEED_CONFIRMATION_CODE:
+                            case EuiccService.RESULT_RESOLVABLE_ERRORS:
+                                // Same value as the deprecated
+                                // {@link EuiccService#RESULT_NEED_CONFIRMATION_CODE}. For the
+                                // deprecated case, the resolvableErrors is set as 0 in
+                                // EuiccService.
                                 resultCode = RESOLVABLE_ERROR;
                                 boolean retried = false;
                                 if (!TextUtils.isEmpty(subscription.getConfirmationCode())) {
                                     retried = true;
                                 }
-                                addResolutionIntent(extrasIntent,
-                                        EuiccService.ACTION_RESOLVE_CONFIRMATION_CODE,
-                                        callingPackage,
-                                        retried /* confirmationCodeRetried */,
-                                        EuiccOperation.forDownloadConfirmationCode(
+                                if (result.getResolvableErrors() != 0) {
+                                    addResolutionIntent(extrasIntent,
+                                            EuiccService.ACTION_RESOLVE_RESOLVABLE_ERRORS,
+                                            callingPackage,
+                                            result.getResolvableErrors(),
+                                            retried,
+                                            EuiccOperation.forDownloadResolvableErrors(
                                                 callingToken, subscription, switchAfterDownload,
-                                                callingPackage));
+                                                callingPackage, result.getResolvableErrors()),
+                                            cardId);
+                                }  else { // Deprecated case
+                                    addResolutionIntent(extrasIntent,
+                                            EuiccService.ACTION_RESOLVE_CONFIRMATION_CODE,
+                                            callingPackage,
+                                            0 /* resolvableErrors */,
+                                            retried /* confirmationCodeRetried */,
+                                            EuiccOperation.forDownloadConfirmationCode(
+                                                callingToken, subscription, switchAfterDownload,
+                                                callingPackage),
+                                            cardId);
+                                }
                                 break;
                             default:
                                 resultCode = ERROR;
                                 extrasIntent.putExtra(
                                         EuiccManager.EXTRA_EMBEDDED_SUBSCRIPTION_DETAILED_CODE,
-                                        result);
+                                        result.getResult());
                                 break;
                         }
 
@@ -503,15 +555,17 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     /**
-     * Blocking call to {@link EuiccService#onGetEuiccProfileInfoList}.
+     * Blocking call to {@link EuiccService#onGetEuiccProfileInfoList} of the eUICC with card ID
+     * {@code cardId}.
      *
      * <p>Does not perform permission checks as this is not an exposed API and is only used within
      * the phone process.
      */
-    public GetEuiccProfileInfoListResult blockingGetEuiccProfileInfoList() {
+    public GetEuiccProfileInfoListResult blockingGetEuiccProfileInfoList(int cardId) {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<GetEuiccProfileInfoListResult> resultRef = new AtomicReference<>();
         mConnector.getEuiccProfileInfoList(
+                cardId,
                 new EuiccConnector.GetEuiccProfileInfoListCommandCallback() {
                     @Override
                     public void onListComplete(GetEuiccProfileInfoListResult result) {
@@ -533,13 +587,13 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Override
-    public void getDefaultDownloadableSubscriptionList(
+    public void getDefaultDownloadableSubscriptionList(int cardId,
             String callingPackage, PendingIntent callbackIntent) {
-        getDefaultDownloadableSubscriptionList(
+        getDefaultDownloadableSubscriptionList(cardId,
                 false /* forceDeactivateSim */, callingPackage, callbackIntent);
     }
 
-    void getDefaultDownloadableSubscriptionList(
+    void getDefaultDownloadableSubscriptionList(int cardId,
             boolean forceDeactivateSim, String callingPackage, PendingIntent callbackIntent) {
         if (!callerCanWriteEmbeddedSubscriptions()) {
             throw new SecurityException(
@@ -548,7 +602,7 @@ public class EuiccController extends IEuiccController.Stub {
         mAppOpsManager.checkPackage(Binder.getCallingUid(), callingPackage);
         long token = Binder.clearCallingIdentity();
         try {
-            mConnector.getDefaultDownloadableSubscriptionList(
+            mConnector.getDefaultDownloadableSubscriptionList(cardId,
                     forceDeactivateSim, new GetDefaultListCommandCallback(
                             token, callingPackage, callbackIntent));
         } finally {
@@ -569,7 +623,8 @@ public class EuiccController extends IEuiccController.Stub {
         }
 
         @Override
-        public void onGetDefaultListComplete(GetDefaultDownloadableSubscriptionListResult result) {
+        public void onGetDefaultListComplete(int cardId,
+                GetDefaultDownloadableSubscriptionListResult result) {
             Intent extrasIntent = new Intent();
             final int resultCode;
             switch (result.getResult()) {
@@ -587,9 +642,11 @@ public class EuiccController extends IEuiccController.Stub {
                     addResolutionIntent(extrasIntent,
                             EuiccService.ACTION_RESOLVE_DEACTIVATE_SIM,
                             mCallingPackage,
+                            0 /* resolvableErrors */,
                             false /* confirmationCodeRetried */,
                             EuiccOperation.forGetDefaultListDeactivateSim(
-                                    mCallingToken, mCallingPackage));
+                                    mCallingToken, mCallingPackage),
+                            cardId);
                     break;
                 default:
                     resultCode = ERROR;
@@ -616,18 +673,18 @@ public class EuiccController extends IEuiccController.Stub {
      * operation.
      */
     @Override
-    public EuiccInfo getEuiccInfo() {
+    public EuiccInfo getEuiccInfo(int cardId) {
         // No permissions required as EuiccInfo is not sensitive.
         long token = Binder.clearCallingIdentity();
         try {
-            return blockingGetEuiccInfoFromEuiccService();
+            return blockingGetEuiccInfoFromEuiccService(cardId);
         } finally {
             Binder.restoreCallingIdentity(token);
         }
     }
 
     @Override
-    public void deleteSubscription(int subscriptionId, String callingPackage,
+    public void deleteSubscription(int cardId, int subscriptionId, String callingPackage,
             PendingIntent callbackIntent) {
         boolean callerCanWriteEmbeddedSubscriptions = callerCanWriteEmbeddedSubscriptions();
         mAppOpsManager.checkPackage(Binder.getCallingUid(), callingPackage);
@@ -641,21 +698,26 @@ public class EuiccController extends IEuiccController.Stub {
                 return;
             }
 
+            // For both single active SIM device and multi-active SIM device, if the caller is
+            // system or the caller manage the target subscription, we let it continue. This is
+            // because deleting subscription won't change status of any other subscriptions.
             if (!callerCanWriteEmbeddedSubscriptions
-                    && !sub.canManageSubscription(mContext, callingPackage)) {
+                    && !mSubscriptionManager.canManageSubscription(sub, callingPackage)) {
                 Log.e(TAG, "No permissions: " + subscriptionId);
                 sendResult(callbackIntent, ERROR, null /* extrasIntent */);
                 return;
             }
 
-            deleteSubscriptionPrivileged(sub.getIccId(), callbackIntent);
+            deleteSubscriptionPrivileged(cardId, sub.getIccId(), callbackIntent);
         } finally {
             Binder.restoreCallingIdentity(token);
         }
     }
 
-    void deleteSubscriptionPrivileged(String iccid, final PendingIntent callbackIntent) {
+    void deleteSubscriptionPrivileged(int cardId, String iccid,
+            final PendingIntent callbackIntent) {
         mConnector.deleteSubscription(
+                cardId,
                 iccid,
                 new EuiccConnector.DeleteCommandCallback() {
                     @Override
@@ -687,14 +749,14 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Override
-    public void switchToSubscription(int subscriptionId, String callingPackage,
+    public void switchToSubscription(int cardId, int subscriptionId, String callingPackage,
             PendingIntent callbackIntent) {
-        switchToSubscription(
+        switchToSubscription(cardId,
                 subscriptionId, false /* forceDeactivateSim */, callingPackage, callbackIntent);
     }
 
-    void switchToSubscription(int subscriptionId, boolean forceDeactivateSim, String callingPackage,
-            PendingIntent callbackIntent) {
+    void switchToSubscription(int cardId, int subscriptionId, boolean forceDeactivateSim,
+            String callingPackage, PendingIntent callbackIntent) {
         boolean callerCanWriteEmbeddedSubscriptions = callerCanWriteEmbeddedSubscriptions();
         mAppOpsManager.checkPackage(Binder.getCallingUid(), callingPackage);
 
@@ -708,9 +770,12 @@ public class EuiccController extends IEuiccController.Stub {
             }
 
             final String iccid;
+            boolean passConsent = false;
             if (subscriptionId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
-                // Switch to "no" subscription. Only the system can do this.
-                if (!callerCanWriteEmbeddedSubscriptions) {
+                if (callerCanWriteEmbeddedSubscriptions
+                        || canManageActiveSubscriptionOnTargetSim(cardId, callingPackage)) {
+                    passConsent = true;
+                } else {
                     Log.e(TAG, "Not permitted to switch to empty subscription");
                     sendResult(callbackIntent, ERROR, null /* extrasIntent */);
                     return;
@@ -719,41 +784,49 @@ public class EuiccController extends IEuiccController.Stub {
             } else {
                 SubscriptionInfo sub = getSubscriptionForSubscriptionId(subscriptionId);
                 if (sub == null) {
-                    Log.e(TAG, "Cannot switch to nonexistent subscription: " + subscriptionId);
+                    Log.e(TAG, "Cannot switch to nonexistent sub: " + subscriptionId);
                     sendResult(callbackIntent, ERROR, null /* extrasIntent */);
                     return;
                 }
-                if (!callerCanWriteEmbeddedSubscriptions
-                        && !mSubscriptionManager.canManageSubscription(sub, callingPackage)) {
-                    Log.e(TAG, "Not permitted to switch to subscription: " + subscriptionId);
-                    sendResult(callbackIntent, ERROR, null /* extrasIntent */);
-                    return;
+                if (callerCanWriteEmbeddedSubscriptions) {
+                    passConsent = true;
+                } else {
+                    if (!mSubscriptionManager.canManageSubscription(sub, callingPackage)) {
+                        Log.e(TAG, "Not permitted to switch to sub: " + subscriptionId);
+                        sendResult(callbackIntent, ERROR, null /* extrasIntent */);
+                        return;
+                    }
+
+                    if (canManageSubscriptionOnTargetSim(cardId, callingPackage)) {
+                        passConsent = true;
+                    }
                 }
                 iccid = sub.getIccId();
             }
 
-            if (!callerCanWriteEmbeddedSubscriptions
-                    && !canManageActiveSubscription(callingPackage)) {
+            if (!passConsent) {
                 // Switch needs consent.
                 Intent extrasIntent = new Intent();
                 addResolutionIntent(extrasIntent,
                         EuiccService.ACTION_RESOLVE_NO_PRIVILEGES,
                         callingPackage,
+                        0 /* resolvableErrors */,
                         false /* confirmationCodeRetried */,
                         EuiccOperation.forSwitchNoPrivileges(
-                                token, subscriptionId, callingPackage));
+                                token, subscriptionId, callingPackage),
+                        cardId);
                 sendResult(callbackIntent, RESOLVABLE_ERROR, extrasIntent);
                 return;
             }
 
-            switchToSubscriptionPrivileged(token, subscriptionId, iccid, forceDeactivateSim,
+            switchToSubscriptionPrivileged(cardId, token, subscriptionId, iccid, forceDeactivateSim,
                     callingPackage, callbackIntent);
         } finally {
             Binder.restoreCallingIdentity(token);
         }
     }
 
-    void switchToSubscriptionPrivileged(final long callingToken, int subscriptionId,
+    void switchToSubscriptionPrivileged(int cardId, final long callingToken, int subscriptionId,
             boolean forceDeactivateSim, final String callingPackage,
             final PendingIntent callbackIntent) {
         String iccid = null;
@@ -761,14 +834,15 @@ public class EuiccController extends IEuiccController.Stub {
         if (sub != null) {
             iccid = sub.getIccId();
         }
-        switchToSubscriptionPrivileged(callingToken, subscriptionId, iccid, forceDeactivateSim,
-                callingPackage, callbackIntent);
+        switchToSubscriptionPrivileged(cardId, callingToken, subscriptionId, iccid,
+                forceDeactivateSim, callingPackage, callbackIntent);
     }
 
-    void switchToSubscriptionPrivileged(final long callingToken, int subscriptionId,
+    void switchToSubscriptionPrivileged(int cardId, final long callingToken, int subscriptionId,
             @Nullable String iccid, boolean forceDeactivateSim, final String callingPackage,
             final PendingIntent callbackIntent) {
         mConnector.switchToSubscription(
+                cardId,
                 iccid,
                 forceDeactivateSim,
                 new EuiccConnector.SwitchCommandCallback() {
@@ -785,9 +859,11 @@ public class EuiccController extends IEuiccController.Stub {
                                 addResolutionIntent(extrasIntent,
                                         EuiccService.ACTION_RESOLVE_DEACTIVATE_SIM,
                                         callingPackage,
+                                        0 /* resolvableErrors */,
                                         false /* confirmationCodeRetried */,
                                         EuiccOperation.forSwitchDeactivateSim(
-                                                callingToken, subscriptionId, callingPackage));
+                                                callingToken, subscriptionId, callingPackage),
+                                        cardId);
                                 break;
                             default:
                                 resultCode = ERROR;
@@ -808,21 +884,31 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Override
-    public void updateSubscriptionNickname(int subscriptionId, String nickname,
-            PendingIntent callbackIntent) {
-        if (!callerCanWriteEmbeddedSubscriptions()) {
-            throw new SecurityException(
-                    "Must have WRITE_EMBEDDED_SUBSCRIPTIONS to update nickname");
-        }
+    public void updateSubscriptionNickname(int cardId, int subscriptionId, String nickname,
+            String callingPackage, PendingIntent callbackIntent) {
+        boolean callerCanWriteEmbeddedSubscriptions = callerCanWriteEmbeddedSubscriptions();
+        mAppOpsManager.checkPackage(Binder.getCallingUid(), callingPackage);
+
         long token = Binder.clearCallingIdentity();
         try {
             SubscriptionInfo sub = getSubscriptionForSubscriptionId(subscriptionId);
             if (sub == null) {
-                Log.e(TAG, "Cannot update nickname to nonexistent subscription: " + subscriptionId);
+                Log.e(TAG, "Cannot update nickname to nonexistent sub: " + subscriptionId);
                 sendResult(callbackIntent, ERROR, null /* extrasIntent */);
                 return;
             }
-            mConnector.updateSubscriptionNickname(
+
+            // For both single active SIM device and multi-active SIM device, if the caller is
+            // system or the caller can manage the target subscription, we let it continue. This is
+            // because updating subscription nickname won't affect any other subscriptions.
+            if (!callerCanWriteEmbeddedSubscriptions
+                    && !mSubscriptionManager.canManageSubscription(sub, callingPackage)) {
+                Log.e(TAG, "No permissions: " + subscriptionId);
+                sendResult(callbackIntent, ERROR, null /* extrasIntent */);
+                return;
+            }
+
+            mConnector.updateSubscriptionNickname(cardId,
                     sub.getIccId(), nickname,
                     new EuiccConnector.UpdateNicknameCommandCallback() {
                         @Override
@@ -832,7 +918,9 @@ public class EuiccController extends IEuiccController.Stub {
                             switch (result) {
                                 case EuiccService.RESULT_OK:
                                     resultCode = OK;
-                                    break;
+                                    refreshSubscriptionsAndSendResult(
+                                            callbackIntent, resultCode, extrasIntent);
+                                    return;
                                 default:
                                     resultCode = ERROR;
                                     extrasIntent.putExtra(
@@ -855,14 +943,14 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Override
-    public void eraseSubscriptions(PendingIntent callbackIntent) {
+    public void eraseSubscriptions(int cardId, PendingIntent callbackIntent) {
         if (!callerCanWriteEmbeddedSubscriptions()) {
             throw new SecurityException(
                     "Must have WRITE_EMBEDDED_SUBSCRIPTIONS to erase subscriptions");
         }
         long token = Binder.clearCallingIdentity();
         try {
-            mConnector.eraseSubscriptions(new EuiccConnector.EraseCommandCallback() {
+            mConnector.eraseSubscriptions(cardId, new EuiccConnector.EraseCommandCallback() {
                 @Override
                 public void onEraseComplete(int result) {
                     Intent extrasIntent = new Intent();
@@ -895,12 +983,12 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Override
-    public void retainSubscriptionsForFactoryReset(PendingIntent callbackIntent) {
+    public void retainSubscriptionsForFactoryReset(int cardId, PendingIntent callbackIntent) {
         mContext.enforceCallingPermission(Manifest.permission.MASTER_CLEAR,
                 "Must have MASTER_CLEAR to retain subscriptions for factory reset");
         long token = Binder.clearCallingIdentity();
         try {
-            mConnector.retainSubscriptions(
+            mConnector.retainSubscriptions(cardId,
                     new EuiccConnector.RetainSubscriptionsCommandCallback() {
                         @Override
                         public void onRetainSubscriptionsComplete(int result) {
@@ -953,11 +1041,14 @@ public class EuiccController extends IEuiccController.Stub {
     /** Add a resolution intent to the given extras intent. */
     @VisibleForTesting(visibility = VisibleForTesting.Visibility.PRIVATE)
     public void addResolutionIntent(Intent extrasIntent, String resolutionAction,
-            String callingPackage, boolean confirmationCodeRetried, EuiccOperation op) {
+            String callingPackage, int resolvableErrors, boolean confirmationCodeRetried,
+            EuiccOperation op, int cardId) {
         Intent intent = new Intent(EuiccManager.ACTION_RESOLVE_ERROR);
         intent.putExtra(EuiccManager.EXTRA_EMBEDDED_SUBSCRIPTION_RESOLUTION_ACTION,
                 resolutionAction);
         intent.putExtra(EuiccService.EXTRA_RESOLUTION_CALLING_PACKAGE, callingPackage);
+        intent.putExtra(EuiccService.EXTRA_RESOLVABLE_ERRORS, resolvableErrors);
+        intent.putExtra(EuiccService.EXTRA_RESOLUTION_CARD_ID, cardId);
         intent.putExtra(EuiccService.EXTRA_RESOLUTION_CONFIRMATION_CODE_RETRIED,
                 confirmationCodeRetried);
         intent.putExtra(EXTRA_OPERATION, op);
@@ -1006,10 +1097,10 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Nullable
-    private String blockingGetEidFromEuiccService() {
+    private String blockingGetEidFromEuiccService(int cardId) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<String> eidRef = new AtomicReference<>();
-        mConnector.getEid(new EuiccConnector.GetEidCommandCallback() {
+        mConnector.getEid(cardId, new EuiccConnector.GetEidCommandCallback() {
             @Override
             public void onGetEidComplete(String eid) {
                 eidRef.set(eid);
@@ -1024,11 +1115,11 @@ public class EuiccController extends IEuiccController.Stub {
         return awaitResult(latch, eidRef);
     }
 
-    private @OtaStatus int blockingGetOtaStatusFromEuiccService() {
+    private @OtaStatus int blockingGetOtaStatusFromEuiccService(int cardId) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<Integer> statusRef =
                 new AtomicReference<>(EUICC_OTA_STATUS_UNAVAILABLE);
-        mConnector.getOtaStatus(new EuiccConnector.GetOtaStatusCommandCallback() {
+        mConnector.getOtaStatus(cardId, new EuiccConnector.GetOtaStatusCommandCallback() {
             @Override
             public void onGetOtaStatusComplete(@OtaStatus int status) {
                 statusRef.set(status);
@@ -1044,10 +1135,10 @@ public class EuiccController extends IEuiccController.Stub {
     }
 
     @Nullable
-    private EuiccInfo blockingGetEuiccInfoFromEuiccService() {
+    private EuiccInfo blockingGetEuiccInfoFromEuiccService(int cardId) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<EuiccInfo> euiccInfoRef = new AtomicReference<>();
-        mConnector.getEuiccInfo(new EuiccConnector.GetEuiccInfoCommandCallback() {
+        mConnector.getEuiccInfo(cardId, new EuiccConnector.GetEuiccInfoCommandCallback() {
             @Override
             public void onGetEuiccInfoComplete(EuiccInfo euiccInfo) {
                 euiccInfoRef.set(euiccInfo);
@@ -1071,22 +1162,85 @@ public class EuiccController extends IEuiccController.Stub {
         return resultRef.get();
     }
 
-    private boolean canManageActiveSubscription(String callingPackage) {
-        // TODO(b/36260308): We should plumb a slot ID through here for multi-SIM devices.
+    private boolean supportMultiActiveSlots() {
+        return mTelephonyManager.getPhoneCount() > 1;
+    }
+
+    // Checks whether the caller can manage the active embedded subscription on the SIM with the
+    // given cardId.
+    private boolean canManageActiveSubscriptionOnTargetSim(int cardId, String callingPackage) {
         List<SubscriptionInfo> subInfoList = mSubscriptionManager.getActiveSubscriptionInfoList();
-        if (subInfoList == null) {
+        if (subInfoList == null || subInfoList.size() == 0) {
+            // No active subscription on any SIM.
             return false;
         }
-        int size = subInfoList.size();
-        for (int subIndex = 0; subIndex < size; subIndex++) {
-            SubscriptionInfo subInfo = subInfoList.get(subIndex);
-
-            if (subInfo.isEmbedded()
+        for (SubscriptionInfo subInfo : subInfoList) {
+            if (subInfo.getCardId() == cardId && subInfo.isEmbedded()
                     && mSubscriptionManager.canManageSubscription(subInfo, callingPackage)) {
                 return true;
             }
         }
         return false;
+    }
+
+    // For a multi-active subscriptions phone, checks whether the caller can manage subscription on
+    // the target SIM with the given cardId. The caller can only manage subscription on the target
+    // SIM if it can manage the active subscription on the target SIM or there is no active
+    // subscription on the target SIM, and the caller can manage any active subscription on any
+    // other SIM. The target SIM should be an eUICC.
+    // For a single-active subscription phone, checks whether the caller can manage any active
+    // embedded subscription.
+    private boolean canManageSubscriptionOnTargetSim(int cardId, String callingPackage) {
+        List<SubscriptionInfo> subInfoList = mSubscriptionManager.getActiveSubscriptionInfoList();
+        // No active subscription on any SIM.
+        if (subInfoList == null || subInfoList.size() == 0) {
+            return false;
+        }
+        if (supportMultiActiveSlots()) {
+            // The target card should be an eUICC.
+            List<UiccCardInfo> cardInfos = mTelephonyManager.getUiccCardsInfo();
+            if (cardInfos == null || cardInfos.isEmpty()) {
+                return false;
+            }
+            boolean isEuicc = false;
+            for (UiccCardInfo info : cardInfos) {
+                if (info != null && info.getCardId() == cardId && info.isEuicc()) {
+                    isEuicc = true;
+                    break;
+                }
+            }
+            if (!isEuicc) {
+                return false;
+            }
+
+            // If the caller can't manage the active embedded subscription on the target SIM, return
+            // false. If the caller can manage the active embedded subscription on the target SIM,
+            // return true directly.
+            for (SubscriptionInfo subInfo : subInfoList) {
+                // subInfo.isEmbedded() can only be true for the target SIM.
+                if (subInfo.getCardId() == cardId) {
+                    return mSubscriptionManager.canManageSubscription(subInfo, callingPackage);
+                }
+            }
+
+            // There is no active subscription on the target SIM, checks whether the caller can
+            // manage any active subscription on any other SIM.
+            for (SubscriptionInfo subInfo : subInfoList) {
+                if (subInfo.getCardId() != cardId
+                        && mSubscriptionManager.canManageSubscription(subInfo, callingPackage)) {
+                    return true;
+                }
+            }
+            return false;
+        } else {
+            for (SubscriptionInfo subInfo : subInfoList) {
+                if (subInfo.isEmbedded()
+                        && mSubscriptionManager.canManageSubscription(subInfo, callingPackage)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     private boolean callerCanReadPhoneStatePrivileged() {
@@ -1097,15 +1251,5 @@ public class EuiccController extends IEuiccController.Stub {
     private boolean callerCanWriteEmbeddedSubscriptions() {
         return mContext.checkCallingPermission(Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS)
                 == PackageManager.PERMISSION_GRANTED;
-    }
-
-    /**
-     * Returns whether the caller has carrier privileges for the active mSubscription on this eUICC.
-     */
-    private boolean callerHasCarrierPrivilegesForActiveSubscription() {
-        // TODO(b/36260308): We should plumb a slot ID through here for multi-SIM devices.
-        TelephonyManager tm =
-                (TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
-        return tm.hasCarrierPrivileges();
     }
 }

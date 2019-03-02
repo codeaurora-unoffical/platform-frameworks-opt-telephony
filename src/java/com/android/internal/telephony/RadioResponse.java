@@ -20,6 +20,7 @@ import android.content.Context;
 import android.hardware.radio.V1_0.ActivityStatsInfo;
 import android.hardware.radio.V1_0.AppStatus;
 import android.hardware.radio.V1_0.CardStatus;
+import android.hardware.radio.V1_0.Carrier;
 import android.hardware.radio.V1_0.CarrierRestrictions;
 import android.hardware.radio.V1_0.CdmaBroadcastSmsConfigInfo;
 import android.hardware.radio.V1_0.DataRegStateResult;
@@ -31,20 +32,24 @@ import android.hardware.radio.V1_0.NeighboringCell;
 import android.hardware.radio.V1_0.RadioError;
 import android.hardware.radio.V1_0.RadioResponseInfo;
 import android.hardware.radio.V1_0.SendSmsResult;
-import android.hardware.radio.V1_0.SetupDataCallResult;
 import android.hardware.radio.V1_0.VoiceRegStateResult;
-import android.hardware.radio.V1_2.IRadioResponse;
+import android.hardware.radio.V1_4.CarrierRestrictionsWithPriority;
+import android.hardware.radio.V1_4.IRadioResponse;
+import android.hardware.radio.V1_4.SimLockMultiSimPolicy;
 import android.os.AsyncResult;
 import android.os.Message;
 import android.os.SystemClock;
 import android.service.carrier.CarrierIdentifier;
+import android.telephony.CarrierRestrictionRules;
 import android.telephony.CellInfo;
 import android.telephony.ModemActivityInfo;
 import android.telephony.NeighboringCellInfo;
 import android.telephony.PhoneNumberUtils;
+import android.telephony.RadioAccessFamily;
 import android.telephony.SignalStrength;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
+import android.telephony.data.DataCallResponse;
 import android.text.TextUtils;
 
 import com.android.internal.telephony.dataconnection.KeepaliveStatus;
@@ -113,11 +118,11 @@ public class RadioResponse extends IRadioResponse.Stub {
 
     /**
      * @param responseInfo Response info struct containing response type, serial no. and error
-     * @param cardStatus ICC card status as defined by CardStatus in 1.3/types.hal
+     * @param cardStatus ICC card status as defined by CardStatus in 1.4/types.hal
      */
-    public void getIccCardStatusResponse_1_3(RadioResponseInfo responseInfo,
-                                             android.hardware.radio.V1_3.CardStatus cardStatus) {
-        responseIccCardStatus_1_3(responseInfo, cardStatus);
+    public void getIccCardStatusResponse_1_4(RadioResponseInfo responseInfo,
+                                             android.hardware.radio.V1_4.CardStatus cardStatus) {
+        responseIccCardStatus_1_4(responseInfo, cardStatus);
     }
 
     /**
@@ -278,6 +283,15 @@ public class RadioResponse extends IRadioResponse.Stub {
             android.hardware.radio.V1_2.SignalStrength signalStrength) {
         responseSignalStrength_1_2(responseInfo, signalStrength);
     }
+     /**
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     * @param signalStrength Current signal strength of camped/connected cells
+     */
+    public void getSignalStrengthResponse_1_4(
+            RadioResponseInfo responseInfo,
+            android.hardware.radio.V1_4.SignalStrength signalStrength) {
+        responseSignalStrength_1_4(responseInfo, signalStrength);
+    }
 
     /**
      * @param responseInfo Response info struct containing response type, serial no. and error
@@ -349,6 +363,24 @@ public class RadioResponse extends IRadioResponse.Stub {
 
     /**
      * @param responseInfo Response info struct containing response type, serial no. and error
+     * @param dataRegResponse Current Data registration response as defined by DataRegStateResult in
+     *        1.4/types.hal
+     */
+    public void getDataRegistrationStateResponse_1_4(RadioResponseInfo responseInfo,
+            android.hardware.radio.V1_4.DataRegStateResult dataRegResponse) {
+        RILRequest rr = mRil.processResponse(responseInfo);
+
+        if (rr != null) {
+            if (responseInfo.error == RadioError.NONE) {
+                sendMessageResponse(rr.mResult, dataRegResponse);
+            }
+            mRil.processResponseDone(rr, responseInfo, dataRegResponse);
+        }
+    }
+
+
+    /**
+     * @param responseInfo Response info struct containing response type, serial no. and error
      * @param longName is long alpha ONS or EONS or empty string if unregistered
      * @param shortName is short alpha ONS or EONS or empty string if unregistered
      * @param numeric is 5 or 6 digit numeric code (MCC + MNC) or empty string if unregistered
@@ -398,7 +430,17 @@ public class RadioResponse extends IRadioResponse.Stub {
      *                            types.hal
      */
     public void setupDataCallResponse(RadioResponseInfo responseInfo,
-                                      SetupDataCallResult setupDataCallResult) {
+            android.hardware.radio.V1_0.SetupDataCallResult setupDataCallResult) {
+        responseSetupDataCall(responseInfo, setupDataCallResult);
+    }
+
+    /**
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     * @param setupDataCallResult Response to data call setup as defined by setupDataCallResult in
+     *                            1.4/types.hal
+     */
+    public void setupDataCallResponse_1_4(RadioResponseInfo responseInfo,
+            android.hardware.radio.V1_4.SetupDataCallResult setupDataCallResult) {
         responseSetupDataCall(responseInfo, setupDataCallResult);
     }
 
@@ -574,6 +616,16 @@ public class RadioResponse extends IRadioResponse.Stub {
     }
 
     /**
+     * The same method as startNetworkScanResponse, except disallowing error codes
+     * OPERATION_NOT_ALLOWED and REQUEST_NOT_SUPPORTED.
+     *
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     */
+    public void startNetworkScanResponse_1_4(RadioResponseInfo responseInfo) {
+        responseScanStatus(responseInfo);
+    }
+
+    /**
      *
      * @param responseInfo Response info struct containing response type, serial no. and error
      */
@@ -642,7 +694,17 @@ public class RadioResponse extends IRadioResponse.Stub {
      *                           types.hal
      */
     public void getDataCallListResponse(RadioResponseInfo responseInfo,
-                                        ArrayList<SetupDataCallResult> dataCallResultList) {
+            ArrayList<android.hardware.radio.V1_0.SetupDataCallResult> dataCallResultList) {
+        responseDataCallList(responseInfo, dataCallResultList);
+    }
+
+    /**
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     * @param dataCallResultList Response to get data call list as defined by setupDataCallResult in
+     *                           1.4/types.hal
+     */
+    public void getDataCallListResponse_1_4(RadioResponseInfo responseInfo,
+            ArrayList<android.hardware.radio.V1_4.SetupDataCallResult> dataCallResultList) {
         responseDataCallList(responseInfo, dataCallResultList);
     }
 
@@ -727,6 +789,14 @@ public class RadioResponse extends IRadioResponse.Stub {
     }
 
     /**
+     * Callback of setPreferredNetworkTypeBitmap defined in IRadio.hal.
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     */
+    public void setPreferredNetworkTypeBitmapResponse(RadioResponseInfo responseInfo) {
+        responseVoid(responseInfo);
+    }
+
+    /**
      *
      * @param responseInfo Response info struct containing response type, serial no. and error
      * @param nwType RadioPreferredNetworkType defined in types.hal
@@ -734,6 +804,19 @@ public class RadioResponse extends IRadioResponse.Stub {
     public void getPreferredNetworkTypeResponse(RadioResponseInfo responseInfo, int nwType) {
         mRil.mPreferredNetworkType = nwType;
         responseInts(responseInfo, nwType);
+    }
+
+    /**
+     * Callback of the getPreferredNetworkTypeBitmap defined in the IRadio.hal.
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     * @param networkTypeBitmap a 32-bit bitmap of
+     * {@link android.telephony.TelephonyManager.NetworkTypeBitMask}.
+     */
+    public void getPreferredNetworkTypeBitmapResponse(
+            RadioResponseInfo responseInfo, int networkTypeBitmap) {
+        int networkType = RadioAccessFamily.getNetworkTypeFromRaf(networkTypeBitmap);
+        mRil.mPreferredNetworkType = networkType;
+        responseInts(responseInfo, networkType);
     }
 
     /**
@@ -1029,6 +1112,16 @@ public class RadioResponse extends IRadioResponse.Stub {
     }
 
     /**
+     * @param responseInfo Response info struct containing response type, serial no. and error.
+     * @param cellInfo List of current cell information known to radio.
+     */
+    public void getCellInfoListResponse_1_4(
+            RadioResponseInfo responseInfo,
+            ArrayList<android.hardware.radio.V1_4.CellInfo> cellInfo) {
+        responseCellInfoList_1_4(responseInfo, cellInfo);
+    }
+
+    /**
      * @param responseInfo Response info struct containing response type, serial no. and error
      */
     public void setCellInfoListRateResponse(RadioResponseInfo responseInfo) {
@@ -1249,19 +1342,74 @@ public class RadioResponse extends IRadioResponse.Stub {
      *        if Length of allowed carriers list is 0, numAllowed = 0.
      */
     public void setAllowedCarriersResponse(RadioResponseInfo responseInfo, int numAllowed) {
-        responseInts(responseInfo, numAllowed);
+        // The number of allowed carriers set correctly is not really useful. Even if one is
+        // missing, the operation has failed, as the list should be treated as a single
+        // configuration item. So, ignoring the value of numAllowed and considering only the
+        // value of the responseInfo.error.
+        int ret = TelephonyManager.SET_CARRIER_RESTRICTION_ERROR;
+        RILRequest rr = mRil.processResponse(responseInfo);
+        if (rr != null) {
+            mRil.riljLog("setAllowedCarriersResponse - error = " + responseInfo.error);
+
+            if (responseInfo.error == RadioError.NONE) {
+                ret = TelephonyManager.SET_CARRIER_RESTRICTION_SUCCESS;
+                sendMessageResponse(rr.mResult, ret);
+            } else if (responseInfo.error == RadioError.REQUEST_NOT_SUPPORTED) {
+                // Handle the case REQUEST_NOT_SUPPORTED as a valid response
+                responseInfo.error = RadioError.NONE;
+                ret = TelephonyManager.SET_CARRIER_RESTRICTION_NOT_SUPPORTED;
+                sendMessageResponse(rr.mResult, ret);
+            }
+            mRil.processResponseDone(rr, responseInfo, ret);
+        }
     }
 
     /**
      *
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     */
+    public void setAllowedCarriersResponse_1_4(RadioResponseInfo responseInfo) {
+        int ret = TelephonyManager.SET_CARRIER_RESTRICTION_ERROR;
+        RILRequest rr = mRil.processResponse(responseInfo);
+        if (rr != null) {
+            mRil.riljLog("setAllowedCarriersResponse_1_4 - error = " + responseInfo.error);
+
+            if (responseInfo.error == RadioError.NONE) {
+                ret = TelephonyManager.SET_CARRIER_RESTRICTION_SUCCESS;
+                sendMessageResponse(rr.mResult, ret);
+            }
+            mRil.processResponseDone(rr, responseInfo, ret);
+        }
+    }
+
+    /**
      * @param responseInfo Response info struct containing response type, serial no. and error
      * @param allAllowed true only when all carriers are allowed. Ignore "carriers" struct.
      *                   If false, consider "carriers" struct
      * @param carriers Carrier restriction information.
      */
     public void getAllowedCarriersResponse(RadioResponseInfo responseInfo, boolean allAllowed,
-                                           CarrierRestrictions carriers) {
-        responseCarrierIdentifiers(responseInfo, allAllowed, carriers);
+            CarrierRestrictions carriers) {
+        CarrierRestrictionsWithPriority carrierRestrictions = new CarrierRestrictionsWithPriority();
+        carrierRestrictions.allowedCarriers = carriers.allowedCarriers;
+        carrierRestrictions.excludedCarriers = carriers.excludedCarriers;
+        carrierRestrictions.allowedCarriersPrioritized = true;
+
+        responseCarrierRestrictions(responseInfo, allAllowed, carrierRestrictions,
+                SimLockMultiSimPolicy.NO_MULTISIM_POLICY);
+    }
+
+    /**
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     * @param carrierRestrictions Carrier restriction information.
+     * @param multiSimPolicy Policy for multi-sim devices.
+     */
+    public void getAllowedCarriersResponse_1_4(RadioResponseInfo responseInfo,
+            CarrierRestrictionsWithPriority carrierRestrictions,
+            int multiSimPolicy) {
+        // The API in IRadio 1.4 does not support the flag allAllowed, so setting it to false, so
+        // that values in carrierRestrictions are used.
+        responseCarrierRestrictions(responseInfo, false, carrierRestrictions, multiSimPolicy);
     }
 
     /**
@@ -1450,8 +1598,8 @@ public class RadioResponse extends IRadioResponse.Stub {
         }
     }
 
-    private void responseIccCardStatus_1_3(RadioResponseInfo responseInfo,
-                                           android.hardware.radio.V1_3.CardStatus cardStatus) {
+    private void responseIccCardStatus_1_4(RadioResponseInfo responseInfo,
+                                           android.hardware.radio.V1_4.CardStatus cardStatus) {
         RILRequest rr = mRil.processResponse(responseInfo);
 
         if (rr != null) {
@@ -1466,6 +1614,13 @@ public class RadioResponse extends IRadioResponse.Stub {
             }
             mRil.processResponseDone(rr, responseInfo, iccCardStatus);
         }
+    }
+
+    /**
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     */
+    public void emergencyDialResponse(RadioResponseInfo responseInfo) {
+        responseVoid(responseInfo);
     }
 
     private void responseInts(RadioResponseInfo responseInfo, int ...var) {
@@ -1720,7 +1875,7 @@ public class RadioResponse extends IRadioResponse.Stub {
         RILRequest rr = mRil.processResponse(responseInfo);
 
         if (rr != null) {
-            SignalStrength ret = RIL.convertHalSignalStrength(signalStrength);
+            SignalStrength ret = new SignalStrength(signalStrength);
             if (responseInfo.error == RadioError.NONE) {
                 sendMessageResponse(rr.mResult, ret);
             }
@@ -1734,7 +1889,21 @@ public class RadioResponse extends IRadioResponse.Stub {
         RILRequest rr = mRil.processResponse(responseInfo);
 
         if (rr != null) {
-            SignalStrength ret = RIL.convertHalSignalStrength_1_2(signalStrength);
+            SignalStrength ret = new SignalStrength(signalStrength);
+            if (responseInfo.error == RadioError.NONE) {
+                sendMessageResponse(rr.mResult, ret);
+            }
+            mRil.processResponseDone(rr, responseInfo, ret);
+        }
+    }
+
+    private void responseSignalStrength_1_4(
+            RadioResponseInfo responseInfo,
+            android.hardware.radio.V1_4.SignalStrength signalStrength) {
+        RILRequest rr = mRil.processResponse(responseInfo);
+
+        if (rr != null) {
+            SignalStrength ret = new SignalStrength(signalStrength);
             if (responseInfo.error == RadioError.NONE) {
                 sendMessageResponse(rr.mResult, ret);
             }
@@ -1755,14 +1924,15 @@ public class RadioResponse extends IRadioResponse.Stub {
     }
 
     private void responseSetupDataCall(RadioResponseInfo responseInfo,
-                                       SetupDataCallResult setupDataCallResult) {
+                                       Object setupDataCallResult) {
         RILRequest rr = mRil.processResponse(responseInfo);
 
         if (rr != null) {
+            DataCallResponse response = RIL.convertDataCallResult(setupDataCallResult);
             if (responseInfo.error == RadioError.NONE) {
-                sendMessageResponse(rr.mResult, setupDataCallResult);
+                sendMessageResponse(rr.mResult, response);
             }
-            mRil.processResponseDone(rr, responseInfo, setupDataCallResult);
+            mRil.processResponseDone(rr, responseInfo, response);
         }
     }
 
@@ -1849,14 +2019,16 @@ public class RadioResponse extends IRadioResponse.Stub {
     }
 
     private void responseDataCallList(RadioResponseInfo responseInfo,
-                                      ArrayList<SetupDataCallResult> dataCallResultList) {
+                                      List<? extends Object> dataCallResultList) {
         RILRequest rr = mRil.processResponse(responseInfo);
 
         if (rr != null) {
+            ArrayList<DataCallResponse> response =
+                    RIL.convertDataCallResultList(dataCallResultList);
             if (responseInfo.error == RadioError.NONE) {
-                sendMessageResponse(rr.mResult, dataCallResultList);
+                sendMessageResponse(rr.mResult, response);
             }
-            mRil.processResponseDone(rr, responseInfo, dataCallResultList);
+            mRil.processResponseDone(rr, responseInfo, response);
         }
     }
 
@@ -1983,6 +2155,20 @@ public class RadioResponse extends IRadioResponse.Stub {
         }
     }
 
+    private void responseCellInfoList_1_4(
+            RadioResponseInfo responseInfo,
+            ArrayList<android.hardware.radio.V1_4.CellInfo> cellInfo) {
+        RILRequest rr = mRil.processResponse(responseInfo);
+
+        if (rr != null) {
+            ArrayList<CellInfo> ret = RIL.convertHalCellInfoList_1_4(cellInfo);
+            if (responseInfo.error == RadioError.NONE) {
+                sendMessageResponse(rr.mResult, ret);
+            }
+            mRil.processResponseDone(rr, responseInfo, ret);
+        }
+    }
+
     private void responseActivityData(RadioResponseInfo responseInfo,
                                       ActivityStatsInfo activityInfo) {
         RILRequest rr = mRil.processResponse(responseInfo);
@@ -2080,34 +2266,92 @@ public class RadioResponse extends IRadioResponse.Stub {
         }
     }
 
-    private void responseCarrierIdentifiers(RadioResponseInfo responseInfo, boolean allAllowed,
-                                            CarrierRestrictions carriers) {
+    private static List<CarrierIdentifier> convertCarrierList(List<Carrier> carrierList) {
+        List<CarrierIdentifier> ret = new ArrayList<>();
+        for (int i = 0; i < carrierList.size(); i++) {
+            String mcc = carrierList.get(i).mcc;
+            String mnc = carrierList.get(i).mnc;
+            String spn = null, imsi = null, gid1 = null, gid2 = null;
+            int matchType = carrierList.get(i).matchType;
+            String matchData = carrierList.get(i).matchData;
+            if (matchType == CarrierIdentifier.MatchType.SPN) {
+                spn = matchData;
+            } else if (matchType == CarrierIdentifier.MatchType.IMSI_PREFIX) {
+                imsi = matchData;
+            } else if (matchType == CarrierIdentifier.MatchType.GID1) {
+                gid1 = matchData;
+            } else if (matchType == CarrierIdentifier.MatchType.GID2) {
+                gid2 = matchData;
+            }
+            ret.add(new CarrierIdentifier(mcc, mnc, spn, imsi, gid1, gid2));
+        }
+        return ret;
+    }
+
+    private void responseCarrierRestrictions(RadioResponseInfo responseInfo, boolean allAllowed,
+                                            CarrierRestrictionsWithPriority carriers,
+                                            int multiSimPolicy) {
+        RILRequest rr = mRil.processResponse(responseInfo);
+        if (rr == null) {
+            return;
+        }
+        CarrierRestrictionRules ret;
+
+        if (allAllowed) {
+            ret = CarrierRestrictionRules.newBuilder().setAllCarriersAllowed().build();
+        } else {
+            int policy = CarrierRestrictionRules.MULTISIM_POLICY_NONE;
+            if (multiSimPolicy == SimLockMultiSimPolicy.ONE_VALID_SIM_MUST_BE_PRESENT) {
+                policy = CarrierRestrictionRules.MULTISIM_POLICY_ONE_VALID_SIM_MUST_BE_PRESENT;
+            }
+
+            int carrierRestrictionDefault =
+                    CarrierRestrictionRules.CARRIER_RESTRICTION_DEFAULT_NOT_ALLOWED;
+            if (!carriers.allowedCarriersPrioritized) {
+                carrierRestrictionDefault =
+                        CarrierRestrictionRules.CARRIER_RESTRICTION_DEFAULT_ALLOWED;
+            }
+
+            ret = CarrierRestrictionRules.newBuilder()
+                    .setAllowedCarriers(convertCarrierList(carriers.allowedCarriers))
+                    .setExcludedCarriers(convertCarrierList(carriers.excludedCarriers))
+                    .setDefaultCarrierRestriction(carrierRestrictionDefault)
+                    .setMultiSimPolicy(policy)
+                    .build();
+        }
+
+        if (responseInfo.error == RadioError.NONE) {
+            sendMessageResponse(rr.mResult, ret);
+        }
+        mRil.processResponseDone(rr, responseInfo, ret);
+    }
+
+    /**
+     * @param responseInfo Response info struct containing response type, serial number and error.
+     */
+    public void enableModemResponse(RadioResponseInfo responseInfo) {
+        responseVoid(responseInfo);
+    }
+
+    /**
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     * @param isEnabled whether the modem stack is enabled.
+     */
+    public void getModemStackStatusResponse(RadioResponseInfo responseInfo, boolean isEnabled) {
         RILRequest rr = mRil.processResponse(responseInfo);
 
         if (rr != null) {
-            List<CarrierIdentifier> ret = new ArrayList<CarrierIdentifier>();
-            for (int i = 0; i < carriers.allowedCarriers.size(); i++) {
-                String mcc = carriers.allowedCarriers.get(i).mcc;
-                String mnc = carriers.allowedCarriers.get(i).mnc;
-                String spn = null, imsi = null, gid1 = null, gid2 = null;
-                int matchType = carriers.allowedCarriers.get(i).matchType;
-                String matchData = carriers.allowedCarriers.get(i).matchData;
-                if (matchType == CarrierIdentifier.MatchType.SPN) {
-                    spn = matchData;
-                } else if (matchType == CarrierIdentifier.MatchType.IMSI_PREFIX) {
-                    imsi = matchData;
-                } else if (matchType == CarrierIdentifier.MatchType.GID1) {
-                    gid1 = matchData;
-                } else if (matchType == CarrierIdentifier.MatchType.GID2) {
-                    gid2 = matchData;
-                }
-                ret.add(new CarrierIdentifier(mcc, mnc, spn, imsi, gid1, gid2));
-            }
             if (responseInfo.error == RadioError.NONE) {
-                /* TODO: Handle excluded carriers */
-                sendMessageResponse(rr.mResult, ret);
+                sendMessageResponse(rr.mResult, isEnabled);
             }
-            mRil.processResponseDone(rr, responseInfo, ret);
+            mRil.processResponseDone(rr, responseInfo, isEnabled);
         }
+    }
+
+    /**
+     * @param responseInfo Response info struct containing response type, serial number and error.
+     */
+    public void setSystemSelectionChannelsResponse(RadioResponseInfo responseInfo) {
+        responseVoid(responseInfo);
     }
 }

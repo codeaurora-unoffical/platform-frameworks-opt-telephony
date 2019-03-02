@@ -16,19 +16,22 @@
 
 package com.android.internal.telephony;
 
+import android.annotation.NonNull;
 import android.content.Context;
+import android.content.res.XmlResourceParser;
 import android.database.Cursor;
 import android.os.Handler;
 import android.os.IDeviceIdleController;
 import android.os.Looper;
 import android.os.ServiceManager;
 import android.telephony.Rlog;
-import android.telephony.AccessNetworkConstants.TransportType;
 
 import com.android.internal.telephony.cdma.CdmaSubscriptionSourceManager;
 import com.android.internal.telephony.cdma.EriManager;
+import com.android.internal.telephony.dataconnection.DataEnabledSettings;
 import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.dataconnection.TransportManager;
+import com.android.internal.telephony.emergency.EmergencyNumberTracker;
 import com.android.internal.telephony.imsphone.ImsExternalCallTracker;
 import com.android.internal.telephony.imsphone.ImsPhone;
 import com.android.internal.telephony.imsphone.ImsPhoneCallTracker;
@@ -39,9 +42,15 @@ import com.android.internal.telephony.uicc.UiccProfile;
 
 import dalvik.system.PathClassLoader;
 
-import java.io.File;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+
+import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * This class has one-line methods to instantiate objects only. The purpose is to make code
@@ -50,39 +59,176 @@ import java.lang.reflect.Method;
  */
 public class TelephonyComponentFactory {
     protected static String LOG_TAG = "TelephonyComponentFactory";
+
+    private static final String TAG = TelephonyComponentFactory.class.getSimpleName();
+
     private static TelephonyComponentFactory sInstance;
+
+    private InjectedComponents mInjectedComponents;
+
+    private static class InjectedComponents {
+        private static final String ATTRIBUTE_JAR = "jar";
+        private static final String ATTRIBUTE_PACKAGE = "package";
+        private static final String TAG_INJECTION = "injection";
+        private static final String TAG_COMPONENTS = "components";
+        private static final String TAG_COMPONENT = "component";
+
+        private final Set<String> mComponentNames = new HashSet<>();
+        private TelephonyComponentFactory mInjectedInstance;
+        private String mPackageName;
+        private String mJarPath;
+
+        private boolean isInjected() {
+            return mPackageName != null && mJarPath != null;
+        }
+
+        private void makeInjectedInstance() {
+            if (isInjected()) {
+                PathClassLoader classLoader = new PathClassLoader(mJarPath,
+                        ClassLoader.getSystemClassLoader());
+                try {
+                    Class<?> cls = classLoader.loadClass(mPackageName);
+                    mInjectedInstance = (TelephonyComponentFactory) cls.newInstance();
+                } catch (ClassNotFoundException e) {
+                    Rlog.e(TAG, "failed: " + e.getMessage());
+                } catch (IllegalAccessException | InstantiationException e) {
+                    Rlog.e(TAG, "injection failed: " + e.getMessage());
+                }
+            }
+        }
+
+        private boolean isComponentInjected(String componentName) {
+            if (mInjectedInstance == null) {
+                return false;
+            }
+            return mComponentNames.contains(componentName);
+        }
+
+        /**
+         * Find the injection tag, set attributes, and then parse the injection.
+         */
+        private void parseXml(@NonNull XmlPullParser parser) {
+            parseXmlByTag(parser, false, p -> {
+                setAttributes(p);
+                parseInjection(p);
+            }, TAG_INJECTION);
+        }
+
+        /**
+         * Only parse the first injection tag. Find the components tag, then try parse it next.
+         */
+        private void parseInjection(@NonNull XmlPullParser parser) {
+            parseXmlByTag(parser, false, p -> parseComponents(p), TAG_COMPONENTS);
+        }
+
+        /**
+         * Only parse the first components tag. Find the component tags, then try parse them next.
+         */
+        private void parseComponents(@NonNull XmlPullParser parser) {
+            parseXmlByTag(parser, true, p -> parseComponent(p), TAG_COMPONENT);
+        }
+
+        /**
+         * Extract text values from component tags.
+         */
+        private void parseComponent(@NonNull XmlPullParser parser) {
+            try {
+                int outerDepth = parser.getDepth();
+                int type;
+                while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                        && (type != XmlPullParser.END_TAG || parser.getDepth() > outerDepth)) {
+                    if (type == XmlPullParser.TEXT) {
+                        mComponentNames.add(parser.getText());
+                    }
+                }
+            } catch (XmlPullParserException | IOException e) {
+                Rlog.e(TAG, "Failed to parse the component." , e);
+            }
+        }
+
+        /**
+         * Iterates the tags, finds the corresponding tag and then applies the consumer.
+         */
+        private void parseXmlByTag(@NonNull XmlPullParser parser, boolean allowDuplicate,
+                @NonNull Consumer<XmlPullParser> consumer, @NonNull final String tag) {
+            try {
+                int outerDepth = parser.getDepth();
+                int type;
+                while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                        && (type != XmlPullParser.END_TAG || parser.getDepth() > outerDepth)) {
+                    if (type == XmlPullParser.START_TAG && tag.equals(parser.getName())) {
+                        consumer.accept(parser);
+                        if (!allowDuplicate) {
+                            return;
+                        }
+                    }
+                }
+            } catch (XmlPullParserException | IOException e) {
+                Rlog.e(TAG, "Failed to parse or find tag: " + tag, e);
+            }
+        }
+
+        /**
+         * Sets the mPackageName and mJarPath by <injection/> tag.
+         * @param parser
+         * @return
+         */
+        private void setAttributes(@NonNull XmlPullParser parser) {
+            for (int i = 0; i < parser.getAttributeCount(); i++) {
+                String name = parser.getAttributeName(i);
+                String value = parser.getAttributeValue(i);
+                if (InjectedComponents.ATTRIBUTE_PACKAGE.equals(name)) {
+                    mPackageName = value;
+                } else if (InjectedComponents.ATTRIBUTE_JAR.equals(name)) {
+                    mJarPath = value;
+                }
+            }
+        }
+    }
 
     public static TelephonyComponentFactory getInstance() {
         if (sInstance == null) {
-            String fullClsName = "com.qualcomm.qti.internal.telephony.QtiTelephonyComponentFactory";
-            String libPath = "/system/framework/qti-telephony-common.jar"
-                    + ":/system/framework/android.hidl.manager-V1.0-java.jar";
+            sInstance = new TelephonyComponentFactory();
+        }
+        return sInstance;
+    }
 
-            PathClassLoader classLoader = new PathClassLoader(libPath,
-                    ClassLoader.getSystemClassLoader());
-            Rlog.d(LOG_TAG, "classLoader = " + classLoader);
+    /**
+     * Inject TelephonyComponentFactory using a xml config file.
+     * @param parser a nullable {@link XmlResourceParser} created with the injection config file.
+     * The config xml should has below formats:
+     * <injection package="package.InjectedTelephonyComponentFactory" jar="path to jar file">
+     *     <components>
+     *         <component>example.package.ComponentAbc</component>
+     *         <component>example.package.ComponentXyz</component>
+     *         <!-- e.g. com.android.internal.telephony.GsmCdmaPhone -->
+     *     </components>
+     * </injection>
+     */
+    public void injectTheComponentFactory(XmlResourceParser parser) {
+        if (mInjectedComponents != null) {
+            Rlog.i(TAG, "Already injected.");
+            return;
+        }
 
-            if (fullClsName == null || fullClsName.length() == 0) {
-                Rlog.d(LOG_TAG, "no customized TelephonyPlugin available, fallback to default");
-                fullClsName = "com.android.internal.telephony.TelephonyComponentFactory";
-            }
+        if (parser != null) {
+            mInjectedComponents = new InjectedComponents();
+            mInjectedComponents.parseXml(parser);
+            mInjectedComponents.makeInjectedInstance();
+            Rlog.i(TAG, "Total components injected: "
+                    + mInjectedComponents.mComponentNames.size());
+        }
+    }
 
-            Class<?> cls = null;
-            try {
-                cls = Class.forName(fullClsName, false, classLoader);
-                Rlog.d(LOG_TAG, "cls = " + cls);
-                Constructor custMethod = cls.getConstructor();
-                Rlog.d(LOG_TAG, "constructor method = " + custMethod);
-                sInstance = (TelephonyComponentFactory) custMethod.newInstance();
-            } catch (NoClassDefFoundError e) {
-                e.printStackTrace();
-                Rlog.e(LOG_TAG, "error loading TelephonyComponentFactory");
-                sInstance = new TelephonyComponentFactory();
-            } catch (Exception e) {
-                e.printStackTrace();
-                Rlog.e(LOG_TAG, "Error loading TelephonyComponentFactory");
-                sInstance = new TelephonyComponentFactory();
-            }
+    /**
+     * Use the injected TelephonyComponentFactory if configured. Otherwise, use the default.
+     * @param componentName Name of the component class uses the injected component factory,
+     * e.g. GsmCdmaPhone.class.getName() for {@link GsmCdmaPhone}
+     * @return injected component factory. If not configured or injected, return the default one.
+     */
+    public TelephonyComponentFactory inject(String componentName) {
+        if (mInjectedComponents != null && mInjectedComponents.isComponentInjected(componentName)) {
+            return mInjectedComponents.mInjectedInstance;
         }
         return sInstance;
     }
@@ -108,6 +254,13 @@ public class TelephonyComponentFactory {
     }
 
     /**
+     * Create a new EmergencyNumberTracker.
+     */
+    public EmergencyNumberTracker makeEmergencyNumberTracker(Phone phone, CommandsInterface ci) {
+        return new EmergencyNumberTracker(phone, ci);
+    }
+
+    /**
      * Sets the NitzStateMachine implementation to use during implementation. This boolean
      * should be removed once the new implementation is stable.
      */
@@ -126,9 +279,8 @@ public class TelephonyComponentFactory {
         return new SimActivationTracker(phone);
     }
 
-    public DcTracker makeDcTracker(Phone phone) {
-        Rlog.d(LOG_TAG, "makeDcTracker");
-        return new DcTracker(phone, TransportType.WWAN);
+    public DcTracker makeDcTracker(Phone phone, int transportType) {
+        return new DcTracker(phone, transportType);
     }
 
     public CarrierSignalAgent makeCarrierSignalAgent(Phone phone) {
@@ -244,34 +396,33 @@ public class TelephonyComponentFactory {
         return new LocaleTracker(phone, nitzStateMachine, looper);
     }
 
+    public DataEnabledSettings makeDataEnabledSettings(Phone phone) {
+        return new DataEnabledSettings(phone);
+    }
+
     public Phone makePhone(Context context, CommandsInterface ci, PhoneNotifier notifier,
             int phoneId, int precisePhoneType,
             TelephonyComponentFactory telephonyComponentFactory) {
-        Rlog.d(LOG_TAG, "makePhone");
+        Rlog.i(TAG, "makePhone");
         return new GsmCdmaPhone(context, ci, notifier, phoneId, precisePhoneType,
                 telephonyComponentFactory);
     }
 
     public SubscriptionController initSubscriptionController(Context c, CommandsInterface[] ci) {
-        Rlog.d(LOG_TAG, "initSubscriptionController");
+        Rlog.i(TAG, "initSubscriptionController");
         return SubscriptionController.init(c, ci);
     }
 
     public SubscriptionInfoUpdater makeSubscriptionInfoUpdater(Looper looper, Context context,
             Phone[] phones, CommandsInterface[] ci) {
-        Rlog.d(LOG_TAG, "makeSubscriptionInfoUpdater");
+        Rlog.i(TAG, "makeSubscriptionInfoUpdater");
         return new SubscriptionInfoUpdater(looper, context, phones, ci);
-    }
-
-    public void makeExtTelephonyClasses(Context context,
-            Phone[] phones, CommandsInterface[] commandsInterfaces) {
-        Rlog.d(LOG_TAG, "makeExtTelephonyClasses");
     }
 
     public PhoneSwitcher makePhoneSwitcher(int maxActivePhones, int numPhones, Context context,
             SubscriptionController subscriptionController, Looper looper, ITelephonyRegistry tr,
             CommandsInterface[] cis, Phone[] phones) {
-        Rlog.d(LOG_TAG, "makePhoneSwitcher");
+        Rlog.i(TAG, "makePhoneSwitcher");
         return new PhoneSwitcher(maxActivePhones,numPhones,
                 context, subscriptionController, looper, tr, cis,
                 phones);
@@ -281,5 +432,10 @@ public class TelephonyComponentFactory {
             int cdmaSubscription, Integer instanceId) {
         Rlog.d(LOG_TAG, "makeRIL");
         return new RIL(context, preferredNetworkType, cdmaSubscription, instanceId);
+    }
+
+    public void makeExtTelephonyClasses(Context context,
+            Phone[] phones, CommandsInterface[] commandsInterfaces) {
+        Rlog.d(LOG_TAG, "makeExtTelephonyClasses");
     }
 }

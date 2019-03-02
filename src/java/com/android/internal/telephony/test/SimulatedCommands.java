@@ -29,9 +29,15 @@ import android.os.Message;
 import android.os.Parcel;
 import android.os.SystemClock;
 import android.os.WorkSource;
-import android.service.carrier.CarrierIdentifier;
+import android.telephony.CarrierRestrictionRules;
 import android.telephony.CellInfo;
 import android.telephony.CellInfoGsm;
+import android.telephony.CellSignalStrengthCdma;
+import android.telephony.CellSignalStrengthGsm;
+import android.telephony.CellSignalStrengthLte;
+import android.telephony.CellSignalStrengthNr;
+import android.telephony.CellSignalStrengthTdscdma;
+import android.telephony.CellSignalStrengthWcdma;
 import android.telephony.IccOpenLogicalChannelResponse;
 import android.telephony.ImsiEncryptionInfo;
 import android.telephony.NetworkRegistrationState;
@@ -42,6 +48,7 @@ import android.telephony.SignalStrength;
 import android.telephony.TelephonyManager;
 import android.telephony.data.DataCallResponse;
 import android.telephony.data.DataProfile;
+import android.telephony.emergency.EmergencyNumber;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.BaseCommands;
@@ -51,6 +58,7 @@ import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.LastCallFailCause;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.telephony.RIL;
 import com.android.internal.telephony.RadioCapability;
 import com.android.internal.telephony.SmsResponse;
 import com.android.internal.telephony.UUSInfo;
@@ -535,7 +543,12 @@ public class SimulatedCommands extends BaseCommands
      */
     @Override
     public void getDataCallList(Message result) {
-        resultSuccess(result, new ArrayList<DataCallResponse>(0));
+        ArrayList<SetupDataCallResult> dcCallList = new ArrayList<SetupDataCallResult>(0);
+        SimulatedCommandsVerifier.getInstance().getDataCallList(result);
+        if (mSetupDataCallResult != null) {
+            dcCallList.add(mSetupDataCallResult);
+        }
+        resultSuccess(result, dcCallList);
     }
 
     /**
@@ -550,8 +563,10 @@ public class SimulatedCommands extends BaseCommands
      * CLIR_INVOCATION  == on "CLIR invocation" (restrict CLI presentation)
      */
     @Override
-    public void dial (String address, int clirMode, Message result) {
-        SimulatedCommandsVerifier.getInstance().dial(address, clirMode, result);
+    public void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
+                     int clirMode, Message result) {
+        SimulatedCommandsVerifier.getInstance().dial(address, isEmergencyCall,
+                emergencyNumberInfo, clirMode, result);
         simulatedCallState.onDial(address);
 
         resultSuccess(result, null);
@@ -569,8 +584,10 @@ public class SimulatedCommands extends BaseCommands
      * CLIR_INVOCATION  == on "CLIR invocation" (restrict CLI presentation)
      */
     @Override
-    public void dial(String address, int clirMode, UUSInfo uusInfo, Message result) {
-        SimulatedCommandsVerifier.getInstance().dial(address, clirMode, uusInfo, result);
+    public void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
+                     int clirMode, UUSInfo uusInfo, Message result) {
+        SimulatedCommandsVerifier.getInstance().dial(address, isEmergencyCall,
+                emergencyNumberInfo, clirMode, uusInfo, result);
         simulatedCallState.onDial(address);
 
         resultSuccess(result, null);
@@ -859,25 +876,15 @@ public class SimulatedCommands extends BaseCommands
 
     @Override
     public void getSignalStrength (Message result) {
-
         if (mSignalStrength == null) {
             mSignalStrength = new SignalStrength(
-                20, // gsmSignalStrength
-                0,  // gsmBitErrorRate
-                -1, // cdmaDbm
-                -1, // cdmaEcio
-                -1, // evdoDbm
-                -1, // evdoEcio
-                -1, // evdoSnr
-                99, // lteSignalStrength
-                SignalStrength.INVALID,     // lteRsrp
-                SignalStrength.INVALID,     // lteRsrq
-                SignalStrength.INVALID,     // lteRssnr
-                SignalStrength.INVALID,     // lteCqi
-                SignalStrength.INVALID      // tdScdmaRscp
-            );
+                    new CellSignalStrengthCdma(),
+                    new CellSignalStrengthGsm(20, 0, CellInfo.UNAVAILABLE),
+                    new CellSignalStrengthWcdma(),
+                    new CellSignalStrengthTdscdma(),
+                    new CellSignalStrengthLte(),
+                    new CellSignalStrengthNr());
         }
-
         resultSuccess(result, mSignalStrength);
     }
 
@@ -1167,11 +1174,11 @@ public class SimulatedCommands extends BaseCommands
             }
         }
 
+        DataCallResponse response = RIL.convertDataCallResult(mSetupDataCallResult);
         if (mDcSuccess) {
-            resultSuccess(result, mSetupDataCallResult);
+            resultSuccess(result, response);
         } else {
-            resultFail(result, mSetupDataCallResult,
-                    new RuntimeException("Setup data call failed!"));
+            resultFail(result, response, new RuntimeException("Setup data call failed!"));
         }
     }
 
@@ -2072,8 +2079,8 @@ public class SimulatedCommands extends BaseCommands
     }
 
     @Override
-    public void setAllowedCarriers(List<CarrierIdentifier> carriers, Message result,
-            WorkSource workSource) {
+    public void setAllowedCarriers(CarrierRestrictionRules carrierRestrictionRules,
+            Message result, WorkSource workSource) {
         unimplemented(result);
     }
 
@@ -2163,20 +2170,12 @@ public class SimulatedCommands extends BaseCommands
     public void notifySignalStrength() {
         if (mSignalStrength == null) {
             mSignalStrength = new SignalStrength(
-                    20, // gsmSignalStrength
-                    0,  // gsmBitErrorRate
-                    -1, // cdmaDbm
-                    -1, // cdmaEcio
-                    -1, // evdoDbm
-                    -1, // evdoEcio
-                    -1, // evdoSnr
-                    99, // lteSignalStrength
-                    SignalStrength.INVALID,     // lteRsrp
-                    SignalStrength.INVALID,     // lteRsrq
-                    SignalStrength.INVALID,     // lteRssnr
-                    SignalStrength.INVALID,     // lteCqi
-                    SignalStrength.INVALID      // tdScdmaRscp
-            );
+                    new CellSignalStrengthCdma(),
+                    new CellSignalStrengthGsm(20, 0, CellInfo.UNAVAILABLE),
+                    new CellSignalStrengthWcdma(),
+                    new CellSignalStrengthTdscdma(),
+                    new CellSignalStrengthLte(),
+                    new CellSignalStrengthNr());
         }
 
         if (mSignalStrengthRegistrant != null) {

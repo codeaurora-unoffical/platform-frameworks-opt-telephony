@@ -18,14 +18,18 @@ package com.android.internal.telephony;
 
 import static com.android.internal.telephony.RILConstants.RADIO_NOT_AVAILABLE;
 import static com.android.internal.telephony.RILConstants.REQUEST_NOT_SUPPORTED;
+import static com.android.internal.telephony.RILConstants.RIL_REQUEST_GET_PHONE_CAPABILITY;
 import static com.android.internal.telephony.RILConstants.RIL_REQUEST_GET_SLOT_STATUS;
 import static com.android.internal.telephony.RILConstants
         .RIL_REQUEST_SET_LOGICAL_TO_PHYSICAL_SLOT_MAPPING;
+import static com.android.internal.telephony.RILConstants.RIL_REQUEST_SET_PREFERRED_DATA_MODEM;
+import static com.android.internal.telephony.RILConstants.RIL_REQUEST_SWITCH_DUAL_SIM_CONFIG;
 
 import android.content.Context;
 import android.hardware.radio.V1_0.RadioResponseInfo;
 import android.hardware.radio.V1_0.RadioResponseType;
 import android.hardware.radio.config.V1_0.IRadioConfig;
+import android.hardware.radio.config.V1_1.ModemsConfig;
 import android.net.ConnectivityManager;
 import android.os.AsyncResult;
 import android.os.Handler;
@@ -41,6 +45,7 @@ import com.android.internal.telephony.uicc.IccSlotStatus;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -53,8 +58,16 @@ public class RadioConfig extends Handler {
 
     private static final int EVENT_SERVICE_DEAD = 1;
 
+    private static final HalVersion RADIO_CONFIG_HAL_VERSION_UNKNOWN = new HalVersion(-1, -1);
+
+    private static final HalVersion RADIO_CONFIG_HAL_VERSION_1_0 = new HalVersion(1, 0);
+
+    private static final HalVersion RADIO_CONFIG_HAL_VERSION_1_1 = new HalVersion(1, 1);
+
     private final boolean mIsMobileNetworkSupported;
     private volatile IRadioConfig mRadioConfigProxy = null;
+    // IRadioConfig version
+    private HalVersion mRadioConfigVersion = RADIO_CONFIG_HAL_VERSION_UNKNOWN;
     private final ServiceDeathRecipient mServiceDeathRecipient;
     private final AtomicLong mRadioConfigProxyCookie = new AtomicLong(0);
     private final RadioConfigResponse mRadioConfigResponse;
@@ -166,24 +179,9 @@ public class RadioConfig extends Handler {
             return mRadioConfigProxy;
         }
 
-        try {
-            mRadioConfigProxy = IRadioConfig.getService(true);
-            if (mRadioConfigProxy != null) {
-                mRadioConfigProxy.linkToDeath(mServiceDeathRecipient,
-                        mRadioConfigProxyCookie.incrementAndGet());
-                mRadioConfigProxy.setResponseFunctions(mRadioConfigResponse,
-                        mRadioConfigIndication);
-            } else {
-                loge("getRadioConfigProxy: mRadioConfigProxy == null");
-            }
-        } catch (RemoteException | RuntimeException e) {
-            mRadioConfigProxy = null;
-            loge("getRadioConfigProxy: RadioConfigProxy getService/setResponseFunctions: " + e);
-        }
+        updateRadioConfigProxy();
 
         if (mRadioConfigProxy == null) {
-            // getService() is a blocking call, so this should never happen
-            loge("getRadioConfigProxy: mRadioConfigProxy == null");
             if (result != null) {
                 AsyncResult.forMessage(result, null,
                         CommandException.fromRilErrno(RADIO_NOT_AVAILABLE));
@@ -192,6 +190,42 @@ public class RadioConfig extends Handler {
         }
 
         return mRadioConfigProxy;
+    }
+
+    private void updateRadioConfigProxy() {
+        try {
+            // Try to get service from different versions.
+            try {
+                mRadioConfigProxy = android.hardware.radio.config.V1_1.IRadioConfig.getService(
+                        true);
+                mRadioConfigVersion = RADIO_CONFIG_HAL_VERSION_1_1;
+            } catch (NoSuchElementException e) {
+            }
+
+            if (mRadioConfigProxy == null) {
+                try {
+                    mRadioConfigProxy = android.hardware.radio.config.V1_0
+                            .IRadioConfig.getService(true);
+                    mRadioConfigVersion = RADIO_CONFIG_HAL_VERSION_1_0;
+                } catch (NoSuchElementException e) {
+                }
+            }
+
+            if (mRadioConfigProxy == null) {
+                loge("getRadioConfigProxy: mRadioConfigProxy == null");
+                return;
+            }
+
+            // Link to death recipient and set response. If fails, set proxy to null and return.
+            mRadioConfigProxy.linkToDeath(mServiceDeathRecipient,
+                    mRadioConfigProxyCookie.incrementAndGet());
+            mRadioConfigProxy.setResponseFunctions(mRadioConfigResponse,
+                    mRadioConfigIndication);
+        } catch (RemoteException | RuntimeException e) {
+            mRadioConfigProxy = null;
+            loge("getRadioConfigProxy: RadioConfigProxy setResponseFunctions: " + e);
+            return;
+        }
     }
 
     private RILRequest obtainRequest(int request, Message result, WorkSource workSource) {
@@ -268,8 +302,50 @@ public class RadioConfig extends Handler {
                         CommandException.fromRilErrno(REQUEST_NOT_SUPPORTED));
                 result.sendToTarget();
             }
+            return;
         }
-        // TODO: call radioConfigProxy.setPreferredDataModem when it's ready.
+
+        RILRequest rr = obtainRequest(RIL_REQUEST_SET_PREFERRED_DATA_MODEM,
+                result, mDefaultWorkSource);
+
+        if (DBG) {
+            logd(rr.serialString() + "> " + requestToString(rr.mRequest));
+        }
+
+        try {
+            ((android.hardware.radio.config.V1_1.IRadioConfig) mRadioConfigProxy)
+                    .setPreferredDataModem(rr.mSerial, (byte) modemId);
+        } catch (RemoteException | RuntimeException e) {
+            resetProxyAndRequestList("setPreferredDataModem", e);
+        }
+    }
+
+    /**
+     * Wrapper function for IRadioConfig.getPhoneCapability().
+     */
+    public void getPhoneCapability(Message result) {
+        IRadioConfig radioConfigProxy = getRadioConfigProxy(result);
+        if (radioConfigProxy == null || mRadioConfigVersion.less(RADIO_CONFIG_HAL_VERSION_1_1)) {
+            if (result != null) {
+                AsyncResult.forMessage(result, null,
+                        CommandException.fromRilErrno(REQUEST_NOT_SUPPORTED));
+                result.sendToTarget();
+            }
+            return;
+        }
+
+        RILRequest rr = obtainRequest(RIL_REQUEST_GET_PHONE_CAPABILITY, result, mDefaultWorkSource);
+
+        if (DBG) {
+            logd(rr.serialString() + "> " + requestToString(rr.mRequest));
+        }
+
+        try {
+            ((android.hardware.radio.config.V1_1.IRadioConfig) mRadioConfigProxy)
+                    .getPhoneCapability(rr.mSerial);
+        } catch (RemoteException | RuntimeException e) {
+            resetProxyAndRequestList("getPhoneCapability", e);
+        }
     }
 
     /**
@@ -279,8 +355,9 @@ public class RadioConfig extends Handler {
      * See PhoneSwitcher for more details.
      */
     public boolean isSetPreferredDataCommandSupported() {
-        // TODO: call radioConfigProxy.isSetPreferredDataCommandSupported when it's ready.
-        return false;
+        IRadioConfig radioConfigProxy = getRadioConfigProxy(null);
+        return radioConfigProxy != null && mRadioConfigVersion
+                .greaterOrEqual(RADIO_CONFIG_HAL_VERSION_1_1);
     }
 
     /**
@@ -320,10 +397,43 @@ public class RadioConfig extends Handler {
                 return "GET_SLOT_STATUS";
             case RIL_REQUEST_SET_LOGICAL_TO_PHYSICAL_SLOT_MAPPING:
                 return "SET_LOGICAL_TO_PHYSICAL_SLOT_MAPPING";
+            case RIL_REQUEST_SWITCH_DUAL_SIM_CONFIG:
+                return "RIL_REQUEST_SWITCH_DUAL_SIM_CONFIG";
             default:
                 return "<unknown request>";
         }
     }
+
+    /**
+     * Wrapper function for using IRadioConfig.setModemsConfig(int32_t serial,
+     * ModemsConfig modemsConfig) to switch between single-sim and multi-sim.
+     */
+    public void setModemsConfig(int numOfLiveModems, Message result) {
+        IRadioConfig radioConfigProxy = getRadioConfigProxy(result);
+        if (radioConfigProxy != null
+                && mRadioConfigVersion.greaterOrEqual(RADIO_CONFIG_HAL_VERSION_1_1)) {
+            android.hardware.radio.config.V1_1.IRadioConfig radioConfigProxy11 =
+                    (android.hardware.radio.config.V1_1.IRadioConfig) radioConfigProxy;
+            RILRequest rr = obtainRequest(RIL_REQUEST_SWITCH_DUAL_SIM_CONFIG,
+                    result, mDefaultWorkSource);
+
+            if (DBG) {
+                logd(rr.serialString() + "> " + requestToString(rr.mRequest)
+                        + "numOfLiveModems = " + numOfLiveModems);
+            }
+
+            try {
+                ModemsConfig modemsConfig = new ModemsConfig();
+                modemsConfig.numOfLiveModems = (byte) numOfLiveModems;
+                radioConfigProxy11.setModemsConfig(rr.mSerial, modemsConfig);
+            } catch (RemoteException | RuntimeException e) {
+                resetProxyAndRequestList("setModemsConfig", e);
+            }
+        }
+    }
+
+    // TODO: not needed for now, but if we don't want to use System Properties any more,
+    // we need to implement a wrapper function for getModemsConfig as well
 
     /**
      * Register a handler to get SIM slot status changed notifications.
@@ -357,10 +467,10 @@ public class RadioConfig extends Handler {
         return response;
     }
 
-    static ArrayList<IccSlotStatus> convertHalSlotStatus_1_1(
-            ArrayList<android.hardware.radio.config.V1_1.SimSlotStatus> halSlotStatusList) {
+    static ArrayList<IccSlotStatus> convertHalSlotStatus_1_2(
+            ArrayList<android.hardware.radio.config.V1_2.SimSlotStatus> halSlotStatusList) {
         ArrayList<IccSlotStatus> response = new ArrayList<IccSlotStatus>(halSlotStatusList.size());
-        for (android.hardware.radio.config.V1_1.SimSlotStatus slotStatus : halSlotStatusList) {
+        for (android.hardware.radio.config.V1_2.SimSlotStatus slotStatus : halSlotStatusList) {
             IccSlotStatus iccSlotStatus = new IccSlotStatus();
             iccSlotStatus.setCardState(slotStatus.base.cardState);
             iccSlotStatus.setSlotState(slotStatus.base.slotState);

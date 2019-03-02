@@ -22,12 +22,15 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.telephony.CallQuality;
 import android.telephony.CellInfo;
+import android.telephony.DataFailCause;
 import android.telephony.PhoneCapability;
 import android.telephony.PhysicalChannelConfig;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 import android.telephony.SubscriptionManager;
+import android.telephony.ims.ImsReasonInfo;
 
 import com.android.internal.telephony.IOnSubscriptionsChangedListener;
 import com.android.internal.telephony.IPhoneStateListener;
@@ -306,26 +309,26 @@ public class TelephonyRegistryMock extends ITelephonyRegistry.Stub {
 
     @Override
     public void notifyDataConnection(int state, boolean isDataConnectivityPossible,
-            String reason, String apn, String apnType, LinkProperties linkProperties,
+            String apn, String apnType, LinkProperties linkProperties,
             NetworkCapabilities networkCapabilities, int networkType, boolean roaming) {
         throw new RuntimeException("Not implemented");
     }
 
     @Override
     public void notifyDataConnectionForSubscriber(int subId, int state,
-            boolean isDataConnectivityPossible, String reason, String apn, String apnType,
+            boolean isDataConnectivityPossible, String apn, String apnType,
             LinkProperties linkProperties, NetworkCapabilities networkCapabilities,
             int networkType, boolean roaming) {
         throw new RuntimeException("Not implemented");
     }
 
     @Override
-    public void notifyDataConnectionFailed(String reason, String apnType) {
+    public void notifyDataConnectionFailed(String apnType) {
         throw new RuntimeException("Not implemented");
     }
 
     @Override
-    public void notifyDataConnectionFailedForSubscriber(int subId, String reason, String apnType) {
+    public void notifyDataConnectionFailedForSubscriber(int subId, String apnType) {
         throw new RuntimeException("Not implemented");
     }
 
@@ -361,8 +364,18 @@ public class TelephonyRegistryMock extends ITelephonyRegistry.Stub {
     }
 
     @Override
+    public void notifyEmergencyNumberList() {
+        throw new RuntimeException("Not implemented");
+    }
+
+    @Override
+    public void notifyCallQualityChanged(CallQuality callQuality, int phoneId) {
+        throw new RuntimeException("Not implemented");
+    }
+
+    @Override
     public void notifyPreciseCallState(int ringingCallState, int foregroundCallState,
-            int backgroundCallState) {
+            int backgroundCallState, int phoneId) {
         throw new RuntimeException("Not implemented");
     }
 
@@ -372,8 +385,8 @@ public class TelephonyRegistryMock extends ITelephonyRegistry.Stub {
     }
 
     @Override
-    public void notifyPreciseDataConnectionFailed(String reason, String apnType, String apn,
-            String failCause) {
+    public void notifyPreciseDataConnectionFailed(String apnType, String apn,
+                                                  @DataFailCause.FailCause int failCause) {
         throw new RuntimeException("Not implemented");
     }
 
@@ -419,6 +432,11 @@ public class TelephonyRegistryMock extends ITelephonyRegistry.Stub {
 
     @Override
     public void notifyRadioPowerStateChanged(int subId) {
+        throw new RuntimeException("Not implemented");
+    }
+
+    @Override
+    public void notifyImsDisconnectCause(int subId, ImsReasonInfo imsReasonInfo)  {
         throw new RuntimeException("Not implemented");
     }
 }

@@ -20,6 +20,7 @@ import static junit.framework.Assert.assertFalse;
 import static junit.framework.Assert.assertTrue;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
@@ -27,9 +28,10 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
-import android.support.test.runner.AndroidJUnit4;
 import android.telephony.TelephonyManager;
 import android.telephony.euicc.EuiccManager;
+
+import androidx.test.runner.AndroidJUnit4;
 
 import com.android.internal.telephony.TelephonyTest;
 import com.android.internal.telephony.uicc.UiccController;
@@ -81,7 +83,7 @@ public class EuiccCardControllerTest extends TelephonyTest {
         mOtaStarted = false;
         mOtaLatch = new CountDownLatch(1);
 
-        when(mEuiccController.getOtaStatus()).thenReturn(EuiccManager.EUICC_OTA_SUCCEEDED);
+        when(mEuiccController.getOtaStatus(anyInt())).thenReturn(EuiccManager.EUICC_OTA_SUCCEEDED);
         doAnswer(new Answer<Void>() {
                 @Override
                 public Void answer(InvocationOnMock invocation) throws Throwable {

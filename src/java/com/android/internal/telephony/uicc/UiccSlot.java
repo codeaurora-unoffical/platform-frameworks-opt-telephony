@@ -28,6 +28,7 @@ import android.os.Message;
 import android.os.PowerManager;
 import android.telephony.Rlog;
 import android.telephony.TelephonyManager;
+import android.text.TextUtils;
 import android.view.WindowManager;
 
 import com.android.internal.R;
@@ -115,6 +116,11 @@ public class UiccSlot extends Handler {
                 if (!mIsEuicc) {
                     mUiccCard = new UiccCard(mContext, mCi, ics, mPhoneId, mLock);
                 } else {
+                    // The EID should be reported with the card status, but in case it's not we want
+                    // to catch that here
+                    if (TextUtils.isEmpty(ics.eid)) {
+                        loge("update: eid is missing. ics.eid=" + ics.eid);
+                    }
                     mUiccCard = new EuiccCard(mContext, mCi, ics, phoneId, mLock);
                 }
             } else {
@@ -195,7 +201,14 @@ public class UiccSlot extends Handler {
     }
 
     public boolean isStateUnknown() {
-        return (mCardState == null || mCardState == CardState.CARDSTATE_ABSENT) && mStateIsUnknown;
+        if (mCardState == null || mCardState == CardState.CARDSTATE_ABSENT) {
+            // mStateIsUnknown is valid only in this scenario.
+            return mStateIsUnknown;
+        }
+        // if mUiccCard is null, assume the state to be UNKNOWN for now.
+        // The state may be known but since the actual card object is not available,
+        // it is safer to return UNKNOWN.
+        return mUiccCard == null;
     }
 
     private void checkIsEuiccSupported() {
@@ -386,7 +399,9 @@ public class UiccSlot extends Handler {
         pw.println("UiccSlot:");
         pw.println(" mCi=" + mCi);
         pw.println(" mActive=" + mActive);
+        pw.println(" mIsEuicc=" + mIsEuicc);
         pw.println(" mLastRadioState=" + mLastRadioState);
+        pw.println(" mIccId=" + mIccId);
         pw.println(" mCardState=" + mCardState);
         if (mUiccCard != null) {
             pw.println(" mUiccCard=" + mUiccCard);
@@ -395,7 +410,6 @@ public class UiccSlot extends Handler {
             pw.println(" mUiccCard=null");
         }
         pw.println();
-        pw.flush();
         pw.flush();
     }
 }

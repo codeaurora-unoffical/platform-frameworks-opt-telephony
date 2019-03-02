@@ -31,13 +31,14 @@ import static org.mockito.Mockito.verify;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Message;
-import android.support.test.filters.FlakyTest;
-import android.support.test.runner.AndroidJUnit4;
 import android.telephony.DisconnectCause;
 import android.telephony.PhoneNumberUtils;
 import android.telephony.ServiceState;
 import android.test.suitebuilder.annotation.MediumTest;
 import android.test.suitebuilder.annotation.SmallTest;
+
+import androidx.test.filters.FlakyTest;
+import androidx.test.runner.AndroidJUnit4;
 
 import org.junit.After;
 import org.junit.Assert;
@@ -118,10 +119,9 @@ public class GsmCdmaCallTrackerTest extends TelephonyTest {
         assertEquals(GsmCdmaCall.State.DIALING, mCTUT.mForegroundCall.getState());
         assertEquals(1, mCTUT.mForegroundCall.getConnections().size());
         /* verify the command is sent out to RIL */
-        verify(mSimulatedCommandsVerifier).dial(eq(PhoneNumberUtils.
-                        extractNetworkPortionAlt(mDialString)), anyInt(),
-                eq((UUSInfo) null),
-                isA(Message.class));
+        verify(mSimulatedCommandsVerifier).dial(
+                eq(PhoneNumberUtils.extractNetworkPortionAlt(mDialString)), eq(false),
+                eq(null), anyInt(), eq((UUSInfo) null), isA(Message.class));
     }
 
     @Test

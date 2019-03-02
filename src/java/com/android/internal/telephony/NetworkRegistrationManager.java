@@ -55,7 +55,7 @@ public class NetworkRegistrationManager {
     // Registrants who listens registration state change callback from this class.
     private final RegistrantList mRegStateChangeRegistrants = new RegistrantList();
 
-    private INetworkService.Stub mServiceBinder;
+    private INetworkService mINetworkService;
 
     private RegManagerDeathRecipient mDeathRecipient;
 
@@ -69,7 +69,7 @@ public class NetworkRegistrationManager {
     }
 
     public boolean isServiceConnected() {
-        return (mServiceBinder != null) && (mServiceBinder.isBinderAlive());
+        return (mINetworkService != null) && (mINetworkService.asBinder().isBinderAlive());
     }
 
     public void unregisterForNetworkRegistrationStateChanged(Handler h) {
@@ -84,12 +84,13 @@ public class NetworkRegistrationManager {
 
     private final Map<NetworkRegStateCallback, Message> mCallbackTable = new Hashtable();
 
-    public void getNetworkRegistrationState(int domain, Message onCompleteMessage) {
+    public void getNetworkRegistrationState(@NetworkRegistrationState.Domain int domain,
+                                            Message onCompleteMessage) {
         if (onCompleteMessage == null) return;
 
-        logd("getNetworkRegistrationState domain " + domain);
         if (!isServiceConnected()) {
-            logd("service not connected.");
+            loge("service not connected. Domain = "
+                    + ((domain == NetworkRegistrationState.DOMAIN_CS) ? "CS" : "PS"));
             onCompleteMessage.obj = new AsyncResult(onCompleteMessage.obj, null,
                     new IllegalStateException("Service not connected."));
             onCompleteMessage.sendToTarget();
@@ -99,7 +100,7 @@ public class NetworkRegistrationManager {
         NetworkRegStateCallback callback = new NetworkRegStateCallback();
         try {
             mCallbackTable.put(callback, onCompleteMessage);
-            mServiceBinder.getNetworkRegistrationState(mPhone.getPhoneId(), domain, callback);
+            mINetworkService.getNetworkRegistrationState(mPhone.getPhoneId(), domain, callback);
         } catch (RemoteException e) {
             Rlog.e(TAG, "getNetworkRegistrationState RemoteException " + e);
             mCallbackTable.remove(callback);
@@ -127,13 +128,14 @@ public class NetworkRegistrationManager {
     private class NetworkServiceConnection implements ServiceConnection {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            logd("service connected.");
-            mServiceBinder = (INetworkService.Stub) service;
+            logd("service " + name + " for transport "
+                    + TransportType.toString(mTransportType) + " is now connected.");
+            mINetworkService = INetworkService.Stub.asInterface(service);
             mDeathRecipient = new RegManagerDeathRecipient(name);
             try {
-                mServiceBinder.linkToDeath(mDeathRecipient, 0);
-                mServiceBinder.createNetworkServiceProvider(mPhone.getPhoneId());
-                mServiceBinder.registerForNetworkRegistrationStateChanged(mPhone.getPhoneId(),
+                service.linkToDeath(mDeathRecipient, 0);
+                mINetworkService.createNetworkServiceProvider(mPhone.getPhoneId());
+                mINetworkService.registerForNetworkRegistrationStateChanged(mPhone.getPhoneId(),
                         new NetworkRegStateCallback());
             } catch (RemoteException exception) {
                 // Remote exception means that the binder already died.
@@ -144,9 +146,10 @@ public class NetworkRegistrationManager {
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
-            logd("onServiceDisconnected " + name);
-            if (mServiceBinder != null) {
-                mServiceBinder.unlinkToDeath(mDeathRecipient, 0);
+            logd("service " + name + " for transport "
+                    + TransportType.toString(mTransportType) + " is now disconnected.");
+            if (mINetworkService != null) {
+                mINetworkService.asBinder().unlinkToDeath(mDeathRecipient, 0);
             }
         }
     }
@@ -180,6 +183,8 @@ public class NetworkRegistrationManager {
         try {
             // We bind this as a foreground service because it is operating directly on the SIM,
             // and we do not want it subjected to power-savings restrictions while doing so.
+            logd("Trying to bind " + getPackageName() + " for transport "
+                    + TransportType.toString(mTransportType));
             return mPhone.getContext().bindService(intent, new NetworkServiceConnection(),
                     Context.BIND_AUTO_CREATE);
         } catch (SecurityException e) {
@@ -218,9 +223,6 @@ public class NetworkRegistrationManager {
             // If carrier config overrides it, use the one from carrier config
             packageName = b.getString(carrierConfig, packageName);
         }
-
-        logd("Binding to packageName " + packageName + " for transport type"
-                + mTransportType);
 
         return packageName;
     }

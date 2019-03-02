@@ -21,11 +21,12 @@ import android.net.LinkProperties;
 import android.os.Handler;
 import android.os.Message;
 import android.os.WorkSource;
-import android.service.carrier.CarrierIdentifier;
+import android.telephony.CarrierRestrictionRules;
 import android.telephony.ClientRequestStats;
 import android.telephony.ImsiEncryptionInfo;
 import android.telephony.NetworkScanRequest;
 import android.telephony.data.DataProfile;
+import android.telephony.emergency.EmergencyNumber;
 
 import com.android.internal.telephony.cdma.CdmaSmsBroadcastConfigInfo;
 import com.android.internal.telephony.dataconnection.TransportManager;
@@ -824,7 +825,8 @@ public interface CommandsInterface {
      * CLIR_SUPPRESSION == on "CLIR suppression" (allow CLI presentation)
      * CLIR_INVOCATION  == on "CLIR invocation" (restrict CLI presentation)
      */
-    void dial (String address, int clirMode, Message result);
+    void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
+              int clirMode, Message result);
 
     /**
      *  returned message
@@ -837,7 +839,8 @@ public interface CommandsInterface {
      * CLIR_SUPPRESSION == on "CLIR suppression" (allow CLI presentation)
      * CLIR_INVOCATION  == on "CLIR invocation" (restrict CLI presentation)
      */
-    void dial(String address, int clirMode, UUSInfo uusInfo, Message result);
+    void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
+              int clirMode, UUSInfo uusInfo, Message result);
 
     /**
      *  returned message
@@ -2065,11 +2068,11 @@ public interface CommandsInterface {
      * Set allowed carriers
      *
      * @param carriers Allowed carriers
-     * @param result Callback message contains the number of carriers set successfully
+     * @param result Callback message contains the result of the operation
      * @param workSource calling WorkSource
      */
-    default void setAllowedCarriers(List<CarrierIdentifier> carriers, Message result,
-            WorkSource workSource) {}
+    default void setAllowedCarriers(CarrierRestrictionRules carrierRestrictionRules,
+            Message result, WorkSource workSource) {}
 
     /**
      * Get allowed carriers
@@ -2222,6 +2225,22 @@ public interface CommandsInterface {
     void unregisterForNattKeepaliveStatus(Handler h);
 
     /**
+     * Register for unsolicited Emergency Number List Indications
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForEmergencyNumberList(Handler h, int what, Object obj);
+
+    /**
+     * Deregister for unsolicited Emergency Number List Indications
+     *
+     * @param h Handler for notification message.
+     */
+    void unregisterForEmergencyNumberList(Handler h);
+
+    /**
      * Start sending NATT Keepalive packets on a specified data connection
      *
      * @param contextId cid that identifies the data connection for this keepalive
@@ -2239,6 +2258,14 @@ public interface CommandsInterface {
      * @param result a Message to return to the requester
      */
     void stopNattKeepalive(int sessionHandle, Message result);
+
+    /**
+     * Enable or disable the logical modem.
+     *
+     * @param enable whether to enable or disable the modem
+     * @param result a Message to return to the requester
+     */
+    default void enableModem(boolean enable, Message result) {};
 
     default List<ClientRequestStats> getClientRequestStats() {
         return null;

@@ -24,6 +24,7 @@ import android.telephony.ImsiEncryptionInfo;
 import android.telephony.NetworkScanRequest;
 import android.telephony.TelephonyManager;
 import android.telephony.data.DataProfile;
+import android.telephony.emergency.EmergencyNumber;
 
 import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.RadioCapability;
@@ -672,13 +673,13 @@ public class SimulatedCommandsVerifier implements CommandsInterface {
     }
 
     @Override
-    public void dial(String address, int clirMode, Message result) {
-
+    public void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
+                     int clirMode, Message result) {
     }
 
     @Override
-    public void dial(String address, int clirMode, UUSInfo uusInfo, Message result) {
-
+    public void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
+                     int clirMode, UUSInfo uusInfo, Message result) {
     }
 
     @Override
@@ -1424,6 +1425,14 @@ public class SimulatedCommandsVerifier implements CommandsInterface {
 
     @Override
     public void unregisterForNattKeepaliveStatus(Handler h) {
+    }
+
+    @Override
+    public void registerForEmergencyNumberList(Handler h, int what, Object obj) {
+    }
+
+    @Override
+    public void unregisterForEmergencyNumberList(Handler h) {
     }
 
     @Override

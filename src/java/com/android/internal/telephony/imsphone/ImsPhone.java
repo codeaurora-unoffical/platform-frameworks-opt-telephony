@@ -102,14 +102,12 @@ import com.android.internal.telephony.gsm.GsmMmiCode;
 import com.android.internal.telephony.gsm.SuppServiceNotification;
 import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.util.NotificationChannelController;
+import com.android.internal.telephony.util.QtiImsUtils;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
-
-import org.codeaurora.ims.QtiCallConstants;
-import org.codeaurora.ims.utils.QtiImsExtUtils;
 
 /**
  * {@hide}
@@ -266,8 +264,11 @@ public class ImsPhone extends ImsPhoneBase {
         // setting the multiendpoint listener on the external call tracker.  So we need to ensure
         // the external call tracker is available first to avoid potential timing issues.
         mExternalCallTracker =
-                TelephonyComponentFactory.getInstance().makeImsExternalCallTracker(this);
-        mCT = TelephonyComponentFactory.getInstance().makeImsPhoneCallTracker(this);
+                TelephonyComponentFactory.getInstance()
+                        .inject(ImsExternalCallTracker.class.getName())
+                        .makeImsExternalCallTracker(this);
+        mCT = TelephonyComponentFactory.getInstance().inject(ImsPhoneCallTracker.class.getName())
+                .makeImsPhoneCallTracker(this);
         mCT.registerPhoneStateListener(mExternalCallTracker);
         mExternalCallTracker.setCallPuller(mCT);
 
@@ -297,8 +298,8 @@ public class ImsPhone extends ImsPhoneBase {
         // for receving RTT Operation
         // .i.e.Upgrade Initiate, Upgrade accept, Upgrade reject
         IntentFilter filter = new IntentFilter();
-        filter.addAction(QtiCallConstants.ACTION_SEND_RTT_TEXT);
-        filter.addAction(QtiCallConstants.ACTION_RTT_OPERATION);
+        filter.addAction(QtiImsUtils.ACTION_SEND_RTT_TEXT);
+        filter.addAction(QtiImsUtils.ACTION_RTT_OPERATION);
         mDefaultPhone.getContext().registerReceiver(mRttReceiver, filter);
     }
 
@@ -1039,7 +1040,15 @@ public class ImsPhone extends ImsPhoneBase {
 
     @Override
     public void setCallWaiting(boolean enable, Message onComplete) {
-        setCallWaiting(enable, CommandsInterface.SERVICE_CLASS_VOICE, onComplete);
+        int serviceClass = CommandsInterface.SERVICE_CLASS_VOICE;
+        CarrierConfigManager configManager = (CarrierConfigManager)
+                getContext().getSystemService(Context.CARRIER_CONFIG_SERVICE);
+        PersistableBundle b = configManager.getConfigForSubId(getSubId());
+        if (b != null) {
+            serviceClass = b.getInt(CarrierConfigManager.KEY_CALL_WAITING_SERVICE_CLASS_INT,
+                    CommandsInterface.SERVICE_CLASS_VOICE);
+        }
+        setCallWaiting(enable, serviceClass, onComplete);
     }
 
     public void setCallWaiting(boolean enable, int serviceClass, Message onComplete) {
@@ -1958,13 +1967,13 @@ public class ImsPhone extends ImsPhoneBase {
     private BroadcastReceiver mRttReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (QtiCallConstants.ACTION_SEND_RTT_TEXT.equals(intent.getAction())) {
+            if (QtiImsUtils.ACTION_SEND_RTT_TEXT.equals(intent.getAction())) {
                 Rlog.d(LOG_TAG, "RTT: Received ACTION_SEND_RTT_TEXT");
-                String data = intent.getStringExtra(QtiCallConstants.RTT_TEXT_VALUE);
+                String data = intent.getStringExtra(QtiImsUtils.RTT_TEXT_VALUE);
                 sendRttMessage(data);
-            } else if (QtiCallConstants.ACTION_RTT_OPERATION.equals(intent.getAction())) {
+            } else if (QtiImsUtils.ACTION_RTT_OPERATION.equals(intent.getAction())) {
                 Rlog.d(LOG_TAG, "RTT: Received ACTION_RTT_OPERATION");
-                int data = intent.getIntExtra(QtiCallConstants.RTT_OPERATION_TYPE, 0);
+                int data = intent.getIntExtra(QtiImsUtils.RTT_OPERATION_TYPE, 0);
                 checkIfModifyRequestOrResponse(data);
             } else {
                 Rlog.d(LOG_TAG, "RTT: unknown intent");
@@ -2057,19 +2066,30 @@ public class ImsPhone extends ImsPhoneBase {
 
         Rlog.d(LOG_TAG, "RTT: checkIfModifyRequestOrResponse data =  " + data);
         switch (data) {
-            case QtiCallConstants.RTT_UPGRADE_INITIATE:
+            case QtiImsUtils.RTT_UPGRADE_INITIATE:
                 // Rtt Upgrade means enable Rtt
                 packRttModifyRequestToProfile(ImsStreamMediaProfile.RTT_MODE_FULL);
                 break;
-            case QtiCallConstants.RTT_DOWNGRADE_INITIATE:
+            case QtiImsUtils.RTT_DOWNGRADE_INITIATE:
                 // Rtt downrade means disable Rtt
                 packRttModifyRequestToProfile(ImsStreamMediaProfile.RTT_MODE_DISABLED);
                 break;
-            case QtiCallConstants.RTT_UPGRADE_CONFIRM:
+            case QtiImsUtils.RTT_UPGRADE_CONFIRM:
                 sendRttModifyResponse(true);
                 break;
-            case QtiCallConstants.RTT_UPGRADE_REJECT:
+            case QtiImsUtils.RTT_UPGRADE_REJECT:
                 sendRttModifyResponse(false);
+                break;
+            case QtiImsUtils.SHOW_RTT_KEYBOARD:
+                ImsCall imsCall = getForegroundCall().getImsCall();
+                if (imsCall != null && isRttSupported() &&
+                    QtiImsUtils.shallShowRttVisibilitySetting(mPhoneId, mContext) &&
+                    !imsCall.isRttCall()) {
+                    packRttModifyRequestToProfile(ImsStreamMediaProfile.RTT_MODE_FULL);
+                }
+                break;
+             case QtiImsUtils.HIDE_RTT_KEYBOARD:
+                //no-op
                 break;
         }
     }
@@ -2090,13 +2110,13 @@ public class ImsPhone extends ImsPhoneBase {
     }
 
     public boolean isRttSupported() {
-        if (!QtiImsExtUtils.isRttSupported(mPhoneId, mContext)) {
+        if (!QtiImsUtils.isRttSupported(mPhoneId, mContext)) {
             Rlog.d(LOG_TAG, "RTT: RTT is not supported");
             return false;
         }
         Rlog.d(LOG_TAG, "RTT: rtt supported = " +
-                QtiImsExtUtils.isRttSupported(mPhoneId, mContext) + ", Rtt mode = " +
-                QtiImsExtUtils.getRttOperatingMode(mContext));
+                QtiImsUtils.isRttSupported(mPhoneId, mContext) + ", Rtt mode = " +
+                QtiImsUtils.getRttOperatingMode(mContext));
         return true;
     }
 
@@ -2106,15 +2126,15 @@ public class ImsPhone extends ImsPhoneBase {
      */
     public boolean isRttVtCallAllowed(ImsCall call) {
         return !(call.getCallProfile().isVideoCall() &&
-                 !QtiImsExtUtils.isRttSupportedOnVtCalls(mPhoneId, mContext));
+                 !QtiImsUtils.isRttSupportedOnVtCalls(mPhoneId, mContext));
     }
 
     public boolean isRttOn() {
-        if (!QtiImsExtUtils.isRttOn(mContext)) {
+        if (!QtiImsUtils.isRttOn(mContext)) {
             Rlog.d(LOG_TAG, "RTT: RTT is off");
             return false;
         }
-        Rlog.d(LOG_TAG, "RTT: Rtt on = " + QtiImsExtUtils.isRttOn(mContext));
+        Rlog.d(LOG_TAG, "RTT: Rtt on = " + QtiImsUtils.isRttOn(mContext));
         return true;
     }
 

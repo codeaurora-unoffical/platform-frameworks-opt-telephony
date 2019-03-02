@@ -18,6 +18,7 @@ package com.android.internal.telephony.uicc;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.AsyncResult;
 import android.os.Handler;
@@ -25,11 +26,15 @@ import android.os.Message;
 import android.os.Registrant;
 import android.os.RegistrantList;
 import android.os.storage.StorageManager;
+import android.preference.PreferenceManager;
 import android.telephony.CarrierConfigManager;
 import android.telephony.Rlog;
 import android.telephony.TelephonyManager;
+import android.telephony.UiccCardInfo;
+import android.text.TextUtils;
 import android.util.LocalLog;
 
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.CommandException;
 import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.IccCardConstants;
@@ -37,6 +42,7 @@ import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.PhoneFactory;
 import com.android.internal.telephony.RadioConfig;
 import com.android.internal.telephony.SubscriptionInfoUpdater;
+import com.android.internal.telephony.uicc.euicc.EuiccCard;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -109,18 +115,42 @@ public class UiccController extends Handler {
     private static final int EVENT_RADIO_AVAILABLE = 6;
     private static final int EVENT_RADIO_UNAVAILABLE = 7;
     private static final int EVENT_SIM_REFRESH = 8;
+    private static final int EVENT_EID_READY = 9;
 
     // this needs to be here, because on bootup we dont know which index maps to which UiccSlot
     private CommandsInterface[] mCis;
-    private UiccSlot[] mUiccSlots;
+    @VisibleForTesting
+    public UiccSlot[] mUiccSlots;
     private int[] mPhoneIdToSlotId;
     private boolean mIsSlotStatusSupported = true;
+
+    // This maps the externally exposed card ID (int) to the internal card ID string (ICCID/EID).
+    // The array index is the card ID (int).
+    // This mapping exists to expose card-based functionality without exposing the EID, which is
+    // considered sensetive information.
+    private ArrayList<String> mCardStrings;
+
+    // This is the card ID of the default eUICC. Whenever we receive slot status, we set it to the
+    // eUICC with the lowest slot index
+    private int mDefaultEuiccCardId;
+
+    private static final int INVALID_CARD_ID = TelephonyManager.INVALID_CARD_ID;
+
+    // GSM SGP.02 section 2.2.2 states that the EID is always 32 digits long
+    private static final int EID_LENGTH = 32;
+
+    // SharedPreference key for saving the known card strings (ICCIDs and EIDs) ordered by card ID
+    private static final String CARD_STRINGS = "card_strings";
+
+    // SharedPreferences key for saving the default euicc card ID
+    private static final String DEFAULT_CARD = "default_card";
 
     private static final Object mLock = new Object();
     private static UiccController mInstance;
     private static ArrayList<IccSlotStatus> sLastSlotStatus;
 
-    private Context mContext;
+    @VisibleForTesting
+    public Context mContext;
 
     protected RegistrantList mIccChangedRegistrants = new RegistrantList();
 
@@ -173,6 +203,8 @@ public class UiccController extends Handler {
         }
 
         mLauncher = new UiccStateChangedLauncher(c, this);
+        mCardStrings = loadCardStrings();
+        mDefaultEuiccCardId = INVALID_CARD_ID;
     }
 
     private int getSlotIdFromPhoneId(int phoneId) {
@@ -415,6 +447,10 @@ public class UiccController extends Handler {
                     if (DBG) log("Received EVENT_SIM_REFRESH");
                     onSimRefresh(ar, phoneId);
                     break;
+                case EVENT_EID_READY:
+                    if (DBG) log("Received EVENT_EID_READY");
+                    onEidReady(ar, phoneId);
+                    break;
                 default:
                     Rlog.e(LOG_TAG, " Unknown Event " + msg.what);
                     break;
@@ -521,8 +557,122 @@ public class UiccController extends Handler {
 
         mUiccSlots[slotId].update(mCis[index], status, index);
 
+        UiccCard card = mUiccSlots[slotId].getUiccCard();
+        if (card == null) {
+            if (DBG) log("mUiccSlots[" + slotId + "] has no card. Notifying IccChangedRegistrants");
+            mIccChangedRegistrants.notifyRegistrants(new AsyncResult(null, index, null));
+            return;
+        }
+
+        String cardString = null;
+        boolean isEuicc = mUiccSlots[slotId].isEuicc();
+        if (isEuicc) {
+            cardString = ((EuiccCard) card).getEid();
+        } else {
+            cardString = card.getIccId();
+        }
+
+        // EID may be unpopulated if RadioConfig<1.2
+        // If so, just register for EID loaded and skip this stuff
+        if (isEuicc && cardString == null) {
+            ((EuiccCard) card).registerForEidReady(this, EVENT_EID_READY, index);
+        } else {
+            addCardId(cardString);
+        }
+
         if (DBG) log("Notifying IccChangedRegistrants");
         mIccChangedRegistrants.notifyRegistrants(new AsyncResult(null, index, null));
+    }
+
+    /**
+     * Add a cardString to mCardStrings. If this is an ICCID, trailing Fs will be automatically
+     * stripped.
+     */
+    private void addCardId(String cardString) {
+        if (TextUtils.isEmpty(cardString)) {
+            return;
+        }
+        if (cardString.length() < EID_LENGTH) {
+            cardString = IccUtils.stripTrailingFs(cardString);
+        }
+        if (!mCardStrings.contains(cardString)) {
+            mCardStrings.add(cardString);
+            saveCardStrings();
+        }
+    }
+
+    /**
+     * Converts the card string (the ICCID/EID, formerly named card ID) to the public int cardId.
+     * If the given cardString is an ICCID, trailing Fs will be automatically stripped before trying
+     * to match to a card ID.
+     *
+     * @return the matching cardId, or INVALID_CARD_ID if the card string does not map to a cardId
+     */
+    public int convertToPublicCardId(String cardString) {
+        if (TextUtils.isEmpty(cardString)) {
+            return INVALID_CARD_ID;
+        }
+        if (cardString.length() < EID_LENGTH) {
+            cardString = IccUtils.stripTrailingFs(cardString);
+        }
+        int id = mCardStrings.indexOf(cardString);
+        if (id == -1) {
+            return INVALID_CARD_ID;
+        } else {
+            return id;
+        }
+    }
+
+    /**
+     * Returns the UiccCardInfo of all currently inserted UICCs and embedded eUICCs.
+     */
+    public ArrayList<UiccCardInfo> getAllUiccCardInfos() {
+        ArrayList<UiccCardInfo> infos = new ArrayList<>();
+        for (int slotIndex = 0; slotIndex < mUiccSlots.length; slotIndex++) {
+            final UiccSlot slot = mUiccSlots[slotIndex];
+            boolean isEuicc = slot.isEuicc();
+            String eid = null;
+            UiccCard card = slot.getUiccCard();
+            if (card == null) {
+                continue;
+            }
+            String iccid = card.getIccId();
+            int cardId = INVALID_CARD_ID;
+            if (isEuicc) {
+                eid = card.getCardId();
+                cardId = convertToPublicCardId(eid);
+            } else {
+                // leave eid null if the UICC is not embedded
+                cardId = convertToPublicCardId(iccid);
+            }
+            UiccCardInfo info = new UiccCardInfo(isEuicc, cardId, eid, iccid, slotIndex);
+            infos.add(info);
+        }
+        return infos;
+    }
+
+    /**
+     * Get the card ID of the default eUICC.
+     */
+    public int getCardIdForDefaultEuicc() {
+        return mDefaultEuiccCardId;
+    }
+
+    private ArrayList<String> loadCardStrings() {
+        String cardStrings =
+                PreferenceManager.getDefaultSharedPreferences(mContext).getString(CARD_STRINGS, "");
+        if (TextUtils.isEmpty(cardStrings)) {
+            // just return an empty list, since String.split would return the list { "" }
+            return new ArrayList<String>();
+        }
+        return new ArrayList<String>(Arrays.asList(cardStrings.split(",")));
+    }
+
+    private void saveCardStrings() {
+        SharedPreferences.Editor editor =
+                PreferenceManager.getDefaultSharedPreferences(mContext).edit();
+        editor.putString(CARD_STRINGS, TextUtils.join(",", mCardStrings));
+        editor.commit();
     }
 
     private synchronized void onGetSlotStatusDone(AsyncResult ar) {
@@ -561,6 +711,7 @@ public class UiccController extends Handler {
         sLastSlotStatus = status;
 
         int numActiveSlots = 0;
+        boolean isDefaultEuiccCardIdSet = false;
         for (int i = 0; i < status.size(); i++) {
             IccSlotStatus iss = status.get(i);
             boolean isActive = (iss.slotState == IccSlotStatus.SlotState.SLOTSTATE_ACTIVE);
@@ -569,10 +720,12 @@ public class UiccController extends Handler {
 
                 // sanity check: logicalSlotIndex should be valid for an active slot
                 if (!isValidPhoneIndex(iss.logicalSlotIndex)) {
-                    throw new RuntimeException("Logical slot index " + iss.logicalSlotIndex
-                            + " invalid for physical slot " + i);
+                    Rlog.e(LOG_TAG, "Skipping slot " + i + " as phone " + iss.logicalSlotIndex
+                               + " is not available to communicate with this slot");
+
+                } else {
+                    mPhoneIdToSlotId[iss.logicalSlotIndex] = i;
                 }
-                mPhoneIdToSlotId[iss.logicalSlotIndex] = i;
             }
 
             if (mUiccSlots[i] == null) {
@@ -582,15 +735,39 @@ public class UiccController extends Handler {
                 mUiccSlots[i] = new UiccSlot(mContext, isActive);
             }
 
-            mUiccSlots[i].update(isActive ? mCis[iss.logicalSlotIndex] : null, iss);
+            if (!isValidPhoneIndex(iss.logicalSlotIndex)) {
+                mUiccSlots[i].update(null, iss);
+            } else {
+                mUiccSlots[i].update(isActive ? mCis[iss.logicalSlotIndex] : null, iss);
+            }
+
+            if (mUiccSlots[i].isEuicc()) {
+                // for RadioConfig<1.2 iss.eid is not populated
+                String eid = iss.eid;
+                if (TextUtils.isEmpty(eid)) {
+                    continue;
+                }
+
+                addCardId(eid);
+
+                // whenever slot status is received, set default card to the eUICC with the
+                // lowest slot index.
+                if (!isDefaultEuiccCardIdSet) {
+                    isDefaultEuiccCardIdSet = true;
+                    // TODO(b/122738148) the default eUICC should not be removable
+                    mDefaultEuiccCardId = convertToPublicCardId(eid);
+                    log("Using eid=" + eid + " in slot=" + i + " to set mDefaultEuiccCardId="
+                            + mDefaultEuiccCardId);
+                }
+            }
         }
 
         if (VDBG) logPhoneIdToSlotIdMapping();
 
         // sanity check: number of active slots should be valid
         if (numActiveSlots != mPhoneIdToSlotId.length) {
-            throw new RuntimeException("Number of active slots " + numActiveSlots
-                    + " does not match the expected value " + mPhoneIdToSlotId.length);
+            Rlog.e(LOG_TAG, "Number of active slots " + numActiveSlots
+                       + " does not match the number of Phones" + mPhoneIdToSlotId.length);
         }
 
         // sanity check: slotIds should be unique in mPhoneIdToSlotId
@@ -687,6 +864,37 @@ public class UiccController extends Handler {
         mCis[index].getIccCardStatus(obtainMessage(EVENT_GET_ICC_STATUS_DONE, index));
     }
 
+    // for RadioConfig 1.2 or higher, the EID comes with the IccSlotStatus
+    // for RadioConfig<1.2 we register for EID ready set mCardStrings and mDefaultEuiccCardId here
+    private void onEidReady(AsyncResult ar, Integer index) {
+        if (ar.exception != null) {
+            Rlog.e(LOG_TAG, "onEidReady: exception: " + ar.exception);
+            return;
+        }
+
+        if (!isValidPhoneIndex(index)) {
+            Rlog.e(LOG_TAG, "onEidReady: invalid index: " + index);
+            return;
+        }
+        int slotId = mPhoneIdToSlotId[index];
+        UiccCard card = mUiccSlots[slotId].getUiccCard();
+        if (card == null) {
+            Rlog.e(LOG_TAG, "onEidReady: UiccCard in slot " + slotId + " is null");
+            return;
+        }
+
+        // set mCardStrings and the defaultEuiccCardId using the now available EID
+        String eid = ((EuiccCard) card).getEid();
+        addCardId(eid);
+        if (mDefaultEuiccCardId == INVALID_CARD_ID) {
+            // TODO(b/122738148) the default eUICC should not be removable
+            mDefaultEuiccCardId = convertToPublicCardId(eid);
+            log("onEidReady: eid=" + eid + " slot=" + slotId + " mDefaultEuiccCardId="
+                    + mDefaultEuiccCardId);
+        }
+        ((EuiccCard) card).unregisterForEidReady(this);
+    }
+
     /**
      * static method to return whether CDMA is supported on the device
      * @param context object representative of the application that is calling this method
@@ -728,6 +936,8 @@ public class UiccController extends Handler {
         pw.flush();
         pw.println(" mIsCdmaSupported=" + isCdmaSupported(mContext));
         pw.println(" mUiccSlots: size=" + mUiccSlots.length);
+        pw.println(" mCardStrings=" + mCardStrings);
+        pw.println(" mDefaultEuiccCardId=" + mDefaultEuiccCardId);
         for (int i = 0; i < mUiccSlots.length; i++) {
             if (mUiccSlots[i] == null) {
                 pw.println("  mUiccSlots[" + i + "]=null");

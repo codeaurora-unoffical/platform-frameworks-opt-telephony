@@ -23,7 +23,10 @@ import android.telecom.ConferenceParticipant;
 import android.telephony.DisconnectCause;
 import android.telephony.Rlog;
 import android.telephony.ServiceState;
+import android.telephony.emergency.EmergencyNumber;
 import android.util.Log;
+
+import com.android.internal.telephony.emergency.EmergencyNumberTracker;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -232,6 +235,14 @@ public abstract class Connection {
     private boolean mAllowAddCallDuringVideoCall;
     private boolean mAllowHoldingVideoCall;
 
+    private boolean mIsEmergencyCall;
+
+    /**
+     * The emergency number information, only valid if {@link #isEmergencyCall} returns
+     * {@code true}.
+     */
+    private EmergencyNumber mEmergencyNumberInfo;
+
     /**
      * When {@code true}, the network has indicated that this is an emergency call.
      */
@@ -436,6 +447,48 @@ public abstract class Connection {
      */
     public void setIsIncoming(boolean isIncoming) {
         mIsIncoming = isIncoming;
+    }
+
+    /**
+     * Checks if the connection is for an emergency call.
+     *
+     * @return {@code true} if the call is an emergency call
+     *         or {@code false} otherwise.
+     */
+    public boolean isEmergencyCall() {
+        return mIsEmergencyCall;
+    }
+
+    /**
+     * Get the emergency number info. The value is valid only if {@link #isEmergencyCall()}
+     * returns {@code true}.
+     *
+     * @return the emergency number info
+     */
+    public EmergencyNumber getEmergencyNumberInfo() {
+        return mEmergencyNumberInfo;
+    }
+
+    /**
+     * Set the emergency numbe information if it is an emergency call.
+     *
+     * @hide
+     */
+    public void setEmergencyCallInfo() {
+        Call call = getCall();
+        if (call != null) {
+            Phone phone = call.getPhone();
+            if (phone != null) {
+                EmergencyNumberTracker tracker = phone.getEmergencyNumberTracker();
+                if (tracker != null) {
+                    EmergencyNumber num = tracker.getEmergencyNumber(mAddress);
+                    if (num != null) {
+                        mIsEmergencyCall = true;
+                        mEmergencyNumberInfo = num;
+                    }
+                }
+            }
+        }
     }
 
     /**

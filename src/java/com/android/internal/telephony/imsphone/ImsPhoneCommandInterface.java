@@ -24,6 +24,7 @@ import android.os.Message;
 import android.telephony.ImsiEncryptionInfo;
 import android.telephony.NetworkScanRequest;
 import android.telephony.data.DataProfile;
+import android.telephony.emergency.EmergencyNumber;
 
 import com.android.internal.telephony.BaseCommands;
 import com.android.internal.telephony.CommandsInterface;
@@ -102,12 +103,13 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
     }
 
     @Override
-    public void dial(String address, int clirMode, Message result) {
+    public void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
+                     int clirMode, Message result) {
     }
 
     @Override
-    public void dial(String address, int clirMode, UUSInfo uusInfo,
-            Message result) {
+    public void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
+                     int clirMode, UUSInfo uusInfo, Message result) {
     }
 
     @Override

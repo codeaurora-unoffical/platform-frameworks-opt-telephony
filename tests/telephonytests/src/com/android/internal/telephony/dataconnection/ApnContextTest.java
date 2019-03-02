@@ -21,9 +21,11 @@ import static junit.framework.Assert.assertFalse;
 import static junit.framework.Assert.assertTrue;
 
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import android.net.NetworkCapabilities;
 import android.net.NetworkConfig;
 import android.net.NetworkRequest;
 import android.telephony.data.ApnSetting;
@@ -87,14 +89,6 @@ public class ApnContextTest extends TelephonyTest {
 
     @Test
     @SmallTest
-    public void testDependencyMet() throws Exception {
-        assertTrue(mApnContext.getDependencyMet());
-        mApnContext.setDependencyMet(false);
-        assertFalse(mApnContext.getDependencyMet());
-    }
-
-    @Test
-    @SmallTest
     public void testReason() throws Exception {
         mApnContext.setReason("dataEnabled");
         assertEquals("dataEnabled", mApnContext.getReason());
@@ -108,10 +102,9 @@ public class ApnContextTest extends TelephonyTest {
         mApnContext.setState(DctConstants.State.DISCONNECTING);
         assertEquals(DctConstants.State.DISCONNECTING, mApnContext.getState());
         mApnContext.setEnabled(true);
-        mApnContext.setDependencyMet(true);
         assertFalse(mApnContext.isConnectable());
 
-        mApnContext.setState(DctConstants.State.SCANNING);
+        mApnContext.setState(DctConstants.State.RETRYING);
         assertTrue(mApnContext.isConnectable());
         assertTrue(mApnContext.isConnectedOrConnecting());
 
@@ -123,19 +116,92 @@ public class ApnContextTest extends TelephonyTest {
 
     @Test
     @SmallTest
-    public void testNetworkRequest() throws Exception {
+    public void testNetworkRequestNormal() throws Exception {
         LocalLog log = new LocalLog(3);
-        NetworkRequest nr = new NetworkRequest.Builder().build();
-        mApnContext.requestNetwork(nr, log);
+        NetworkRequest nr1 = new NetworkRequest.Builder().build();
+        mApnContext.requestNetwork(nr1, DcTracker.REQUEST_TYPE_NORMAL, log);
 
-        verify(mDcTracker, times(1)).setEnabled(eq(ApnSetting.TYPE_DEFAULT), eq(true));
-        mApnContext.requestNetwork(nr, log);
-        verify(mDcTracker, times(1)).setEnabled(eq(ApnSetting.TYPE_DEFAULT), eq(true));
+        verify(mDcTracker, times(1)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_NORMAL));
+        mApnContext.requestNetwork(nr1, DcTracker.REQUEST_TYPE_NORMAL, log);
+        verify(mDcTracker, times(1)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_NORMAL));
 
-        mApnContext.releaseNetwork(nr, log);
-        verify(mDcTracker, times(1)).setEnabled(eq(ApnSetting.TYPE_DEFAULT), eq(false));
-        mApnContext.releaseNetwork(nr, log);
-        verify(mDcTracker, times(1)).setEnabled(eq(ApnSetting.TYPE_DEFAULT), eq(false));
+        mApnContext.requestNetwork(nr1, DcTracker.REQUEST_TYPE_NORMAL, log);
+        // The same request should be ignore.
+        verify(mDcTracker, times(1)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_NORMAL));
+
+        NetworkRequest nr2 = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+                .build();
+        LocalLog log2 = new LocalLog(3);
+
+        mApnContext.requestNetwork(nr2, DcTracker.REQUEST_TYPE_NORMAL, log2);
+        verify(mDcTracker, times(2)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_NORMAL));
+
+        mApnContext.releaseNetwork(nr1, DcTracker.RELEASE_TYPE_NORMAL, log);
+        verify(mDcTracker, never()).disableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.RELEASE_TYPE_NORMAL));
+
+        mApnContext.releaseNetwork(nr2, DcTracker.RELEASE_TYPE_NORMAL, log2);
+        verify(mDcTracker, times(1)).disableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.RELEASE_TYPE_NORMAL));
+    }
+
+    @Test
+    @SmallTest
+    public void testNetworkRequestDetach() throws Exception {
+        LocalLog log = new LocalLog(3);
+        NetworkRequest nr1 = new NetworkRequest.Builder().build();
+        mApnContext.requestNetwork(nr1, DcTracker.REQUEST_TYPE_NORMAL, log);
+
+        verify(mDcTracker, times(1)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_NORMAL));
+        mApnContext.requestNetwork(nr1, DcTracker.REQUEST_TYPE_NORMAL, log);
+        verify(mDcTracker, times(1)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_NORMAL));
+
+        mApnContext.requestNetwork(nr1, DcTracker.REQUEST_TYPE_NORMAL, log);
+        // The same request should be ignore.
+        verify(mDcTracker, times(1)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_NORMAL));
+
+        NetworkRequest nr2 = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+                .build();
+        LocalLog log2 = new LocalLog(3);
+
+        mApnContext.requestNetwork(nr2, DcTracker.REQUEST_TYPE_NORMAL, log2);
+        verify(mDcTracker, times(2)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_NORMAL));
+
+        mApnContext.releaseNetwork(nr1, DcTracker.RELEASE_TYPE_DETACH, log);
+        verify(mDcTracker, times(1)).disableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.RELEASE_TYPE_DETACH));
+
+        mApnContext.releaseNetwork(nr2, DcTracker.RELEASE_TYPE_NORMAL, log2);
+        verify(mDcTracker, times(1)).disableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.RELEASE_TYPE_NORMAL));
+    }
+
+    @Test
+    @SmallTest
+    public void testNetworkRequestHandover() throws Exception {
+        LocalLog log = new LocalLog(3);
+        NetworkRequest nr1 = new NetworkRequest.Builder().build();
+        mApnContext.requestNetwork(nr1, DcTracker.REQUEST_TYPE_HANDOVER, log);
+        verify(mDcTracker, times(1)).enableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.REQUEST_TYPE_HANDOVER));
+
+        mApnContext.releaseNetwork(nr1, DcTracker.RELEASE_TYPE_HANDOVER, log);
+        verify(mDcTracker, times(1)).disableApn(eq(ApnSetting.TYPE_DEFAULT),
+                eq(DcTracker.RELEASE_TYPE_HANDOVER));
     }
 
     @Test
@@ -198,16 +264,9 @@ public class ApnContextTest extends TelephonyTest {
     @SmallTest
     public void testIsReady() throws Exception {
         mApnContext.setEnabled(true);
-        mApnContext.setDependencyMet(true);
         assertTrue(mApnContext.isReady());
 
         mApnContext.setEnabled(false);
-        assertFalse(mApnContext.isReady());
-
-        mApnContext.setDependencyMet(false);
-        assertFalse(mApnContext.isReady());
-
-        mApnContext.setEnabled(true);
         assertFalse(mApnContext.isReady());
     }
 

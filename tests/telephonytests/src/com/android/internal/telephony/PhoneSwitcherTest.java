@@ -40,6 +40,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Message;
 import android.os.Messenger;
+import android.telephony.PhoneCapability;
 import android.telephony.SubscriptionManager;
 import android.test.suitebuilder.annotation.SmallTest;
 
@@ -68,6 +69,10 @@ public class PhoneSwitcherTest extends TelephonyTest {
     private Phone mPhone2; // mPhone as phone 1 is already defined in TelephonyTest.
     @Mock
     private Handler mActivePhoneSwitchHandler;
+    @Mock
+    private GsmCdmaCall mActiveCall;
+    @Mock
+    private GsmCdmaCall mInactiveCall;
 
     // The thread that mPhoneSwitcher will handle events in.
     private HandlerThread mHandlerThread;
@@ -84,6 +89,9 @@ public class PhoneSwitcherTest extends TelephonyTest {
     @Before
     public void setUp() throws Exception {
         super.setUp(getClass().getSimpleName());
+
+        PhoneCapability phoneCapability = new PhoneCapability(1, 1, 0, null, false);
+        doReturn(phoneCapability).when(mPhoneConfigurationManager).getCurrentPhoneCapability();
     }
 
     @After
@@ -103,14 +111,14 @@ public class PhoneSwitcherTest extends TelephonyTest {
 
         // verify nothing has been done while there are no inputs
         assertFalse("data allowed initially", mDataAllowed[0]);
-        assertFalse("data allowed initially", mDataAllowed[0]);
-        assertFalse("phone active initially", mPhoneSwitcher.shouldApplySpecifiedRequests(0));
+        assertFalse("data allowed initially", mDataAllowed[1]);
 
         NetworkRequest internetNetworkRequest = addInternetNetworkRequest(null, 50);
         waitABit();
 
         assertFalse("data allowed after request", mDataAllowed[0]);
-        assertFalse("phone active after request", mPhoneSwitcher.shouldApplySpecifiedRequests(0));
+        assertFalse("phone active after request", mPhoneSwitcher
+                .shouldApplyNetworkRequest(internetNetworkRequest, 0));
 
         // not registered yet - shouldn't inc
         verify(mActivePhoneSwitchHandler, never()).sendMessageAtTime(any(), anyLong());
@@ -378,13 +386,13 @@ public class PhoneSwitcherTest extends TelephonyTest {
         assertTrue(mDataAllowed[0]);
 
         // Set sub 2 as preferred sub should make phone 1 activated and phone 0 deactivated.
-        mPhoneSwitcher.setPreferredData(2);
+        mPhoneSwitcher.setOpportunisticDataSubscription(2);
         waitABit();
         assertFalse(mDataAllowed[0]);
         assertTrue(mDataAllowed[1]);
 
         // Unset preferred sub should make default data sub (phone 0 / sub 1) activated again.
-        mPhoneSwitcher.setPreferredData(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID);
+        mPhoneSwitcher.unsetOpportunisticDataSubscription();
         waitABit();
         assertTrue(mDataAllowed[0]);
         assertFalse(mDataAllowed[1]);
@@ -413,51 +421,47 @@ public class PhoneSwitcherTest extends TelephonyTest {
         setSlotIndexToSubId(1, 2);
         setDefaultDataSubId(1);
         waitABit();
-        // Phone 0 (sub 1) should preferredDataModem it has default data sub.
+        // Phone 0 (sub 1) should be preferred data phone as it has default data sub.
         verify(mMockRadioConfig).setPreferredDataModem(eq(0), any());
         verify(mActivePhoneSwitchHandler, times(2)).sendMessageAtTime(any(), anyLong());
-        assertTrue(mPhoneSwitcher.shouldApplySpecifiedRequests(0));
-        assertTrue(mPhoneSwitcher.shouldApplySpecifiedRequests(1));
-        assertTrue(mPhoneSwitcher.shouldApplyUnspecifiedRequests(0));
-        assertFalse(mPhoneSwitcher.shouldApplyUnspecifiedRequests(1));
 
         clearInvocations(mMockRadioConfig);
         clearInvocations(mActivePhoneSwitchHandler);
 
         // Notify phoneSwitcher about default data sub and default network request.
         // It shouldn't change anything.
-        addInternetNetworkRequest(null, 50);
-        addMmsNetworkRequest(2);
+        NetworkRequest internetRequest = addInternetNetworkRequest(null, 50);
+        NetworkRequest mmsRequest = addMmsNetworkRequest(2);
         waitABit();
         verify(mMockRadioConfig, never()).setPreferredDataModem(anyInt(), any());
         verify(mActivePhoneSwitchHandler, never()).sendMessageAtTime(any(), anyLong());
-        assertTrue(mPhoneSwitcher.shouldApplySpecifiedRequests(0));
-        assertTrue(mPhoneSwitcher.shouldApplySpecifiedRequests(1));
-        assertTrue(mPhoneSwitcher.shouldApplyUnspecifiedRequests(0));
-        assertFalse(mPhoneSwitcher.shouldApplyUnspecifiedRequests(1));
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 0));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(mmsRequest, 0));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 1));
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(mmsRequest, 1));
 
         // Set sub 2 as preferred sub should make phone 1 preferredDataModem
-        mPhoneSwitcher.setPreferredData(2);
+        mPhoneSwitcher.setOpportunisticDataSubscription(2);
         waitABit();
         verify(mMockRadioConfig).setPreferredDataModem(eq(1), any());
         verify(mActivePhoneSwitchHandler, times(2)).sendMessageAtTime(any(), anyLong());
-        assertTrue(mPhoneSwitcher.shouldApplySpecifiedRequests(0));
-        assertTrue(mPhoneSwitcher.shouldApplySpecifiedRequests(1));
-        assertFalse(mPhoneSwitcher.shouldApplyUnspecifiedRequests(0));
-        assertTrue(mPhoneSwitcher.shouldApplyUnspecifiedRequests(1));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 0));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(mmsRequest, 0));
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 1));
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(mmsRequest, 1));
 
         clearInvocations(mMockRadioConfig);
         clearInvocations(mActivePhoneSwitchHandler);
 
         // Unset preferred sub should make phone0 preferredDataModem again.
-        mPhoneSwitcher.setPreferredData(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID);
+        mPhoneSwitcher.unsetOpportunisticDataSubscription();
         waitABit();
         verify(mMockRadioConfig).setPreferredDataModem(eq(0), any());
         verify(mActivePhoneSwitchHandler, times(2)).sendMessageAtTime(any(), anyLong());
-        assertTrue(mPhoneSwitcher.shouldApplySpecifiedRequests(0));
-        assertTrue(mPhoneSwitcher.shouldApplySpecifiedRequests(1));
-        assertTrue(mPhoneSwitcher.shouldApplyUnspecifiedRequests(0));
-        assertFalse(mPhoneSwitcher.shouldApplyUnspecifiedRequests(1));
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 0));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(mmsRequest, 0));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 1));
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(mmsRequest, 1));
 
         // SetDataAllowed should never be triggered.
         verify(mCommandsInterface0, never()).setDataAllowed(anyBoolean(), any());
@@ -465,6 +469,57 @@ public class PhoneSwitcherTest extends TelephonyTest {
 
         mHandlerThread.quit();
 
+    }
+
+    @Test
+    @SmallTest
+    public void testNonDefaultDataPhoneInCall() throws Exception {
+        final int numPhones = 2;
+        final int maxActivePhones = 1;
+        doReturn(true).when(mMockRadioConfig).isSetPreferredDataCommandSupported();
+        initialize(numPhones, maxActivePhones);
+        // Phone 0 has sub 1, phone 1 has sub 2.
+        // Sub 1 is default data sub.
+        // Both are active subscriptions are active sub, as they are in both active slots.
+        setSlotIndexToSubId(0, 1);
+        setSlotIndexToSubId(1, 2);
+        setDefaultDataSubId(1);
+        waitABit();
+        NetworkRequest internetRequest = addInternetNetworkRequest(null, 50);
+        waitABit();
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 0));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 1));
+        clearInvocations(mMockRadioConfig);
+
+        doReturn(Call.State.ACTIVE).when(mActiveCall).getState();
+        doReturn(Call.State.IDLE).when(mInactiveCall).getState();
+        doReturn(mInactiveCall).when(mPhone).getForegroundCall();
+        doReturn(mInactiveCall).when(mPhone).getBackgroundCall();
+        doReturn(mInactiveCall).when(mPhone).getRingingCall();
+        doReturn(mInactiveCall).when(mPhone2).getForegroundCall();
+        doReturn(mInactiveCall).when(mPhone2).getBackgroundCall();
+        doReturn(mInactiveCall).when(mPhone2).getRingingCall();
+
+        // Initialization done.
+
+        // Phone2 has active call. So data switch to it.
+        doReturn(mActiveCall).when(mPhone2).getForegroundCall();
+        mPhoneSwitcher.mPhoneStateListener.onPreciseCallStateChanged(null);
+        waitABit();
+        verify(mMockRadioConfig).setPreferredDataModem(eq(1), any());
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 1));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 0));
+        clearInvocations(mMockRadioConfig);
+
+        // Phone2 call ended. So data switch back to default data sub.
+        doReturn(mInactiveCall).when(mPhone2).getForegroundCall();
+        mPhoneSwitcher.mPhoneStateListener.onPreciseCallStateChanged(null);
+        waitABit();
+        verify(mMockRadioConfig).setPreferredDataModem(eq(0), any());
+        assertTrue(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 0));
+        assertFalse(mPhoneSwitcher.shouldApplyNetworkRequest(internetRequest, 1));
+
+        mHandlerThread.quit();
     }
 
     /* Private utility methods start here */
@@ -488,9 +543,10 @@ public class PhoneSwitcherTest extends TelephonyTest {
         mHandlerThread = new HandlerThread("PhoneSwitcherTestThread") {
             @Override
             public void onLooperPrepared() {
-                mPhoneSwitcher = new PhoneSwitcher(maxActivePhones, numPhones,
-                        mContext, mSubscriptionController, this.getLooper(),
-                        mTelRegistryMock, mCommandsInterfaces, mPhones);
+                mPhoneSwitcher = TelephonyComponentFactory.getInstance().inject(PhoneSwitcher.
+                    class.getName()).makePhoneSwitcher(maxActivePhones, numPhones,
+                    mContext, mSubscriptionController, this.getLooper(),
+                    mTelRegistryMock, mCommandsInterfaces, mPhones);
             }
         };
 
@@ -507,11 +563,14 @@ public class PhoneSwitcherTest extends TelephonyTest {
     private void setNumPhones(int numPhones) {
         mDataAllowed = new boolean[numPhones];
         mSlotIndexToSubId = new int[numPhones][];
+        doReturn(0).when(mPhone).getPhoneId();
+        doReturn(1).when(mPhone2).getPhoneId();
         for (int i = 0; i < numPhones; i++) {
             mSlotIndexToSubId[i] = new int[1];
             mSlotIndexToSubId[i][0] = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         }
 
+        doReturn(numPhones).when(mTelephonyManager).getPhoneCount();
         if (numPhones == 1) {
             mCommandsInterfaces = new CommandsInterface[] {mCommandsInterface0};
             mPhones = new Phone[] {mPhone};

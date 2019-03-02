@@ -26,20 +26,25 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import android.content.Context;
+import android.content.Intent;
 import android.net.wifi.WifiManager;
 import android.os.AsyncResult;
 import android.os.HandlerThread;
 import android.os.Message;
 import android.telephony.CellIdentityGsm;
+import android.telephony.CellInfo;
 import android.telephony.CellInfoGsm;
 import android.telephony.ServiceState;
+import android.telephony.TelephonyManager;
 import android.test.suitebuilder.annotation.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.Arrays;
+import java.util.List;
 
 public class LocaleTrackerTest extends TelephonyTest {
 
@@ -83,8 +88,10 @@ public class LocaleTrackerTest extends TelephonyTest {
         mWifiManager = (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE);
 
         mCellInfo = new CellInfoGsm();
-        mCellInfo.setCellIdentity(new CellIdentityGsm(Integer.parseInt(US_MCC),
-                Integer.parseInt(FAKE_MNC), 0, 0));
+        mCellInfo.setCellIdentity(new CellIdentityGsm(
+                    CellInfo.UNAVAILABLE, CellInfo.UNAVAILABLE,
+                    CellInfo.UNAVAILABLE, CellInfo.UNAVAILABLE,
+                    US_MCC, FAKE_MNC, null, null));
         doAnswer(invocation -> {
             Message m = invocation.getArgument(1);
             AsyncResult.forMessage(m, Arrays.asList(mCellInfo), null);
@@ -119,12 +126,31 @@ public class LocaleTrackerTest extends TelephonyTest {
         waitForHandlerAction(mLocaleTracker, 100);
     }
 
+    private void verifyCountryCodeNotified(String[] countryCodes) {
+        ArgumentCaptor<String> stringArgumentCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mWifiManager, times(countryCodes.length)).setCountryCode(
+                stringArgumentCaptor.capture());
+        List<String> strs = stringArgumentCaptor.getAllValues();
+
+        ArgumentCaptor<Intent> intentArgumentCaptor = ArgumentCaptor.forClass(Intent.class);
+        verify(mContext, times(countryCodes.length)).sendBroadcast(intentArgumentCaptor.capture());
+        List<Intent> intents = intentArgumentCaptor.getAllValues();
+
+        for (int i = 0; i < countryCodes.length; i++) {
+            assertEquals(countryCodes[i], strs.get(i));
+            assertEquals(TelephonyManager.ACTION_NETWORK_COUNTRY_CHANGED,
+                    intents.get(i).getAction());
+            assertEquals(countryCodes[i], intents.get(i).getStringExtra(
+                    TelephonyManager.EXTRA_NETWORK_COUNTRY));
+        }
+    }
+
     @Test
     @SmallTest
     public void testUpdateOperatorNumericSync() throws Exception {
         mLocaleTracker.updateOperatorNumeric(US_MCC + FAKE_MNC);
         assertEquals(US_COUNTRY_CODE, mLocaleTracker.getCurrentCountry());
-        verify(mWifiManager).setCountryCode(US_COUNTRY_CODE);
+        verifyCountryCodeNotified(new String[]{US_COUNTRY_CODE});
     }
 
     @Test
@@ -134,7 +160,7 @@ public class LocaleTrackerTest extends TelephonyTest {
         sendGsmCellInfo();
         sendServiceState(ServiceState.STATE_EMERGENCY_ONLY);
         assertEquals(US_COUNTRY_CODE, mLocaleTracker.getCurrentCountry());
-        verify(mWifiManager).setCountryCode(US_COUNTRY_CODE);
+        verifyCountryCodeNotified(new String[]{COUNTRY_CODE_UNAVAILABLE, US_COUNTRY_CODE});
         assertTrue(mLocaleTracker.isTracking());
     }
 
@@ -144,7 +170,7 @@ public class LocaleTrackerTest extends TelephonyTest {
         mLocaleTracker.updateOperatorNumeric("");
         sendServiceState(ServiceState.STATE_POWER_OFF);
         assertEquals(COUNTRY_CODE_UNAVAILABLE, mLocaleTracker.getCurrentCountry());
-        verify(mWifiManager).setCountryCode(COUNTRY_CODE_UNAVAILABLE);
+        verifyCountryCodeNotified(new String[]{COUNTRY_CODE_UNAVAILABLE});
         assertFalse(mLocaleTracker.isTracking());
     }
 
@@ -154,13 +180,14 @@ public class LocaleTrackerTest extends TelephonyTest {
         sendServiceState(ServiceState.STATE_IN_SERVICE);
         mLocaleTracker.updateOperatorNumeric(US_MCC + FAKE_MNC);
         assertEquals(US_COUNTRY_CODE, mLocaleTracker.getCurrentCountry());
-        verify(mWifiManager).setCountryCode(US_COUNTRY_CODE);
+        verifyCountryCodeNotified(new String[]{COUNTRY_CODE_UNAVAILABLE, US_COUNTRY_CODE});
         assertFalse(mLocaleTracker.isTracking());
 
         mLocaleTracker.updateOperatorNumeric("");
         waitForHandlerAction(mLocaleTracker, 100);
         assertEquals(COUNTRY_CODE_UNAVAILABLE, mLocaleTracker.getCurrentCountry());
-        verify(mWifiManager, times(2)).setCountryCode(COUNTRY_CODE_UNAVAILABLE);
+        verifyCountryCodeNotified(new String[]{COUNTRY_CODE_UNAVAILABLE, US_COUNTRY_CODE,
+                COUNTRY_CODE_UNAVAILABLE});
         sendServiceState(ServiceState.STATE_POWER_OFF);
         assertFalse(mLocaleTracker.isTracking());
     }
@@ -172,7 +199,7 @@ public class LocaleTrackerTest extends TelephonyTest {
         mLocaleTracker.updateOperatorNumeric("");
         waitForHandlerAction(mLocaleTracker, 100);
         assertEquals(COUNTRY_CODE_UNAVAILABLE, mLocaleTracker.getCurrentCountry());
-        verify(mWifiManager).setCountryCode(COUNTRY_CODE_UNAVAILABLE);
+        verifyCountryCodeNotified(new String[]{COUNTRY_CODE_UNAVAILABLE});
         assertFalse(mLocaleTracker.isTracking());
 
         sendServiceState(ServiceState.STATE_OUT_OF_SERVICE);

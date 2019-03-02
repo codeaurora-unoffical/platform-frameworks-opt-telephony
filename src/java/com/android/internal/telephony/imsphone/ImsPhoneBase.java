@@ -23,10 +23,12 @@ import android.os.Handler;
 import android.os.Message;
 import android.os.RegistrantList;
 import android.os.SystemProperties;
+import android.telephony.CallQuality;
 import android.telephony.NetworkScanRequest;
 import android.telephony.Rlog;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
+import android.telephony.ims.ImsReasonInfo;
 import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
@@ -133,6 +135,10 @@ abstract class ImsPhoneBase extends Phone {
         mTtyModeReceivedRegistrants.notifyRegistrants(result);
     }
 
+    public void onCallQualityChanged(CallQuality callQuality) {
+        mNotifier.notifyCallQualityChanged(this, callQuality);
+    }
+
     @Override
     public ServiceState getServiceState() {
         // FIXME: we may need to provide this when data connectivity is lost
@@ -208,7 +214,10 @@ abstract class ImsPhoneBase extends Phone {
     public void notifyDisconnect(Connection cn) {
         mDisconnectRegistrants.notifyResult(cn);
 
-        mNotifier.notifyDisconnectCause(cn.getDisconnectCause(), cn.getPreciseDisconnectCause());
+    }
+
+    public void notifyImsReason(ImsReasonInfo imsReasonInfo) {
+        mNotifier.notifyImsDisconnectCause(this, imsReasonInfo);
     }
 
     void notifyUnknownConnection() {
@@ -460,16 +469,6 @@ abstract class ImsPhoneBase extends Phone {
         return false;
     }
 
-    @Override
-    public boolean isDataEnabled() {
-        return false;
-    }
-
-    @Override
-    public void setUserDataEnabled(boolean enable) {
-    }
-
-
     public boolean enableDataConnectivity() {
         return false;
     }
@@ -479,7 +478,7 @@ abstract class ImsPhoneBase extends Phone {
     }
 
     @Override
-    public boolean isDataAllowed() {
+    public boolean isDataAllowed(int apnType) {
         return false;
     }
 
