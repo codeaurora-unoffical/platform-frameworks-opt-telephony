@@ -858,6 +858,12 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
             if (mImsManager != null && mServiceId > 0) {
                 mImsManager.close(mServiceId);
                 mServiceId = -1;
+                mPhone.setServiceState(ServiceState.STATE_OUT_OF_SERVICE);
+                mPhone.setImsRegistered(false);
+                ImsReasonInfo imsReasonInfo = new ImsReasonInfo(
+                        ImsReasonInfo.CODE_REGISTRATION_ERROR,
+                        ImsReasonInfo.CODE_UNSPECIFIED, null);
+                mPhone.processDisconnectReason(imsReasonInfo);
             }
         } catch (ImsException e) {
             // If the binder is unavailable, then the ImsService doesn't need to close.
@@ -1102,9 +1108,10 @@ public class ImsPhoneCallTracker extends CallTracker implements ImsPullCall {
         CarrierConfigManager carrierConfigManager = (CarrierConfigManager)
                 mPhone.getContext().getSystemService(Context.CARRIER_CONFIG_SERVICE);
         if (carrierConfigManager == null ||
-                !SubscriptionController.getInstance().isActiveSubId(subId)) {
-            loge("cacheCarrierConfiguration: No carrier config service found" + " " +
-                    "or not active subId = " + subId);
+                !SubscriptionController.getInstance().isActiveSubId(subId) ||
+                !mPhone.getDefaultPhone().getIccRecordsLoaded()) {
+            loge("cacheCarrierConfiguration: No carrier config service found or records not" +
+                    " loaded or not active subId = " + subId);
             mCarrierConfigLoaded = false;
             return;
         }
