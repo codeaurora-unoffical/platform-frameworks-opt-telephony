@@ -181,7 +181,8 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     @VisibleForTesting
     protected static final int EVENT_ICC_CHANGED                    = 30;
     // Single Radio Voice Call Continuity
-    private static final int EVENT_SRVCC_STATE_CHANGED              = 31;
+    @VisibleForTesting
+    protected static final int EVENT_SRVCC_STATE_CHANGED             = 31;
     private static final int EVENT_INITIATE_SILENT_REDIAL           = 32;
     private static final int EVENT_RADIO_NOT_AVAILABLE              = 33;
     private static final int EVENT_UNSOL_OEM_HOOK_RAW               = 34;
@@ -293,6 +294,9 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     private boolean mIsVoiceCapable = true;
     private final AppSmsManager mAppSmsManager;
     private SimActivationTracker mSimActivationTracker;
+    // Keep track of the case where ECM was cancelled to place another outgoing emergency call.
+    // We will need to restart it after the emergency call ends.
+    protected boolean mEcmCanceledForEmergency = false;
     private volatile long mTimeLastEmergencySmsSentMs = EMERGENCY_SMS_NO_TIME_RECORDED;
 
     // Variable to cache the video capability. When RAT changes, we lose this info and are unable
@@ -417,6 +421,8 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
     private boolean mUnitTestMode;
 
+    private final CarrierPrivilegesTracker mCarrierPrivilegesTracker;
+
     public IccRecords getIccRecords() {
         return mIccRecords.get();
     }
@@ -537,6 +543,8 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         */
         mIsVoiceCapable = ((TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE))
                 .isVoiceCapable();
+
+        mCarrierPrivilegesTracker = new CarrierPrivilegesTracker(mLooper, this, mContext);
 
         /**
          *  Some RIL's don't always send RIL_UNSOL_CALL_RING so it needs
@@ -1004,9 +1012,14 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         if (from.isInEmergencyCall()) {
             setIsInEmergencyCall();
         }
+        setEcmCanceledForEmergency(from.isEcmCanceledForEmergency());
     }
 
     protected void migrate(RegistrantList to, RegistrantList from) {
+        if (from == null) {
+            // May be null in some cases, such as testing.
+            return;
+        }
         from.removeCleared();
         for (int i = 0, n = from.size(); i < n; i++) {
             Registrant r = (Registrant) from.get(i);
@@ -2157,6 +2170,21 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         int modemRaf = getRadioAccessFamily();
         int rafFromType = RadioAccessFamily.getRafFromNetworkType(networkType);
 
+        long allowedNetworkTypes = -1;
+        if (SubscriptionController.getInstance() != null) {
+            String result = SubscriptionController.getInstance().getSubscriptionProperty(
+                    getSubId(),
+                    SubscriptionManager.ALLOWED_NETWORK_TYPES);
+
+            if (result != null) {
+                try {
+                    allowedNetworkTypes = Long.parseLong(result);
+                } catch (NumberFormatException err) {
+                    Rlog.d(LOG_TAG, "allowedNetworkTypes NumberFormat exception");
+                }
+            }
+        }
+
         if (modemRaf == RadioAccessFamily.RAF_UNKNOWN
                 || rafFromType == RadioAccessFamily.RAF_UNKNOWN) {
             Rlog.d(LOG_TAG, "setPreferredNetworkType: Abort, unknown RAF: "
@@ -2171,12 +2199,13 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
             return;
         }
 
-        int filteredRaf = (rafFromType & modemRaf);
+        int filteredRaf = (int) (rafFromType & modemRaf & allowedNetworkTypes);
         int filteredType = RadioAccessFamily.getNetworkTypeFromRaf(filteredRaf);
 
         Rlog.d(LOG_TAG, "setPreferredNetworkType: networkType = " + networkType
                 + " modemRaf = " + modemRaf
                 + " rafFromType = " + rafFromType
+                + " allowedNetworkTypes = " + allowedNetworkTypes
                 + " filteredType = " + filteredType);
 
         mCi.setPreferredNetworkType(filteredType, response);
@@ -2544,6 +2573,24 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         return false;
     }
 
+    /**
+     * @return true if this Phone is in an emergency call that caused emergency callback mode to be
+     * canceled, false if not.
+     */
+    public boolean isEcmCanceledForEmergency() {
+        return mEcmCanceledForEmergency;
+    }
+
+    /**
+     * Set whether or not this Phone has an active emergency call that was placed during emergency
+     * callback mode and caused it to be temporarily canceled.
+     * @param isCanceled true if an emergency call was placed that caused ECM to be canceled, false
+     *                   if it is not in this state.
+     */
+    public void setEcmCanceledForEmergency(boolean isCanceled) {
+        mEcmCanceledForEmergency = isCanceled;
+    }
+
     @UnsupportedAppUsage
     private static int getVideoState(Call call) {
         int videoState = VideoProfile.STATE_AUDIO_ONLY;
@@ -2746,23 +2793,6 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      */
     public String getCdmaPrlVersion(){
         return null;
-    }
-
-    /**
-     * Initiate to add a participant in an IMS call.
-     * This happens asynchronously, so you cannot assume the audio path is
-     * connected (or a call index has been assigned) until PhoneStateChanged
-     * notification has occurred.
-     *
-     * @exception CallStateException if a new outgoing call is not currently
-     *                possible because no more call slots exist or a call exists
-     *                that is dialing, alerting, ringing, or waiting. Other
-     *                errors are handled asynchronously.
-     */
-    public void addParticipant(String dialString) throws CallStateException {
-        // To be overridden by GsmCdmaPhone and ImsPhone.
-        throw new CallStateException("addParticipant :: No-Op base implementation. "
-                + this);
     }
 
     /**
@@ -4042,16 +4072,6 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         return getLocaleFromCarrierProperties();
     }
 
-    public void updateDataConnectionTracker() {
-        if (mTransportManager != null) {
-            for (int transport : mTransportManager.getAvailableTransports()) {
-                if (getDcTracker(transport) != null) {
-                    getDcTracker(transport).update();
-                }
-            }
-        }
-    }
-
     public boolean updateCurrentCarrierInProvider() {
         return false;
     }
@@ -4135,10 +4155,6 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      * @param msg The message to dispatch when the USSD session terminated.
      */
     public void cancelUSSD(Message msg) {
-    }
-
-    public String getOperatorNumeric() {
-        return "";
     }
 
     /**
@@ -4265,6 +4281,21 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         return RIL.RADIO_HAL_VERSION_UNKNOWN;
     }
 
+    /**
+     * Get the SIM's MCC/MNC
+     *
+     * @return MCC/MNC in string format, empty string if not available.
+     */
+    @NonNull
+    public String getOperatorNumeric() {
+        return "";
+    }
+
+    /** @hide */
+    public CarrierPrivilegesTracker getCarrierPrivilegesTracker() {
+        return mCarrierPrivilegesTracker;
+    }
+
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         pw.println("Phone: subId=" + getSubId());
         pw.println(" mPhoneId=" + mPhoneId);
@@ -4300,7 +4331,10 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         pw.println(" getActiveApnTypes()=" + getActiveApnTypes());
         pw.println(" needsOtaServiceProvisioning=" + needsOtaServiceProvisioning());
         pw.println(" isInEmergencySmsMode=" + isInEmergencySmsMode());
+        pw.println(" isEcmCanceledForEmergency=" + isEcmCanceledForEmergency());
         pw.println(" service state=" + getServiceState());
+        String privilegedUids = Arrays.toString(mCarrierPrivilegesTracker.mPrivilegedUids);
+        pw.println(" administratorUids=" + privilegedUids);
         pw.flush();
         pw.println("++++++++++++++++++++++++++++++++");
 
