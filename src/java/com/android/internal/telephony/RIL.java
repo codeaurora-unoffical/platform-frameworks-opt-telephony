@@ -52,6 +52,7 @@ import android.hardware.radio.V1_4.CarrierRestrictionsWithPriority;
 import android.hardware.radio.V1_4.SimLockMultiSimPolicy;
 import android.hardware.radio.V1_5.AccessNetwork;
 import android.hardware.radio.V1_5.IndicationFilter;
+import android.hardware.radio.V1_5.PersoSubstate;
 import android.hardware.radio.V1_5.RadioAccessNetworks;
 import android.hardware.radio.deprecated.V1_0.IOemHook;
 import android.net.InetAddresses;
@@ -112,6 +113,7 @@ import com.android.internal.telephony.cdma.CdmaSmsBroadcastConfigInfo;
 import com.android.internal.telephony.gsm.SmsBroadcastConfigInfo;
 import com.android.internal.telephony.metrics.TelephonyMetrics;
 import com.android.internal.telephony.nano.TelephonyProto.SmsSession;
+import com.android.internal.telephony.uicc.IccCardApplicationStatus.PersoSubState;
 import com.android.internal.telephony.uicc.IccUtils;
 import com.android.internal.telephony.util.TelephonyUtils;
 import com.android.telephony.Rlog;
@@ -687,7 +689,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
         }
     }
 
-    private RILRequest obtainRequest(int request, Message result, WorkSource workSource) {
+    protected RILRequest obtainRequest(int request, Message result, WorkSource workSource) {
         RILRequest rr = RILRequest.obtain(request, result, workSource);
         addRequest(rr);
         return rr;
@@ -699,7 +701,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
         return rr.mSerial;
     }
 
-    private void handleRadioProxyExceptionForRR(RILRequest rr, String caller, Exception e) {
+    protected void handleRadioProxyExceptionForRR(RILRequest rr, String caller, Exception e) {
         riljLoge(caller + ": " + e);
         resetProxyAndRequestList();
     }
@@ -927,6 +929,115 @@ public class RIL extends BaseCommands implements CommandsInterface {
             } catch (RemoteException | RuntimeException e) {
                 handleRadioProxyExceptionForRR(rr, "supplyNetworkDepersonalization", e);
             }
+        }
+    }
+
+    @Override
+    public void supplySimDepersonalization(PersoSubState persoType,
+            String controlKey, Message result) {
+        IRadio radioProxy = getRadioProxy(result);
+        // IRadio V1.5
+        if (mRadioVersion.greaterOrEqual(RADIO_HAL_VERSION_1_5)) {
+            android.hardware.radio.V1_5.IRadio radioProxy15 =
+                (android.hardware.radio.V1_5.IRadio) radioProxy;
+            if (radioProxy15 != null) {
+                RILRequest rr = obtainRequest(RIL_REQUEST_ENTER_SIM_DEPERSONALIZATION, result,
+                        mRILDefaultWorkSource);
+                if (RILJ_LOGD) {
+                    riljLog(rr.serialString() + "> " + requestToString(rr.mRequest) + " controlKey = "
+                        + controlKey + " persoType" + persoType);
+                }
+                try {
+                    radioProxy15.supplySimDepersonalization(rr.mSerial,
+                            convertPersoTypeToHalPersoType(persoType),
+                            convertNullToEmptyString(controlKey));
+                } catch (RemoteException | RuntimeException e) {
+                    handleRadioProxyExceptionForRR(rr, "supplySimDepersonalization", e);
+                }
+            }
+        } else {
+            if (result != null) {
+                AsyncResult.forMessage(result, null,
+                        CommandException.fromRilErrno(REQUEST_NOT_SUPPORTED));
+                result.sendToTarget();
+            }
+        }
+    }
+
+    private static int convertPersoTypeToHalPersoType(PersoSubState persoType) {
+
+        switch(persoType) {
+
+            case PERSOSUBSTATE_IN_PROGRESS:
+                return PersoSubstate.IN_PROGRESS;
+            case  PERSOSUBSTATE_READY:
+                return PersoSubstate.READY;
+            case PERSOSUBSTATE_SIM_NETWORK:
+                return PersoSubstate.SIM_NETWORK;
+            case PERSOSUBSTATE_SIM_NETWORK_SUBSET:
+                return PersoSubstate.SIM_NETWORK_SUBSET;
+            case PERSOSUBSTATE_SIM_CORPORATE:
+                return PersoSubstate.SIM_CORPORATE;
+            case PERSOSUBSTATE_SIM_SERVICE_PROVIDER:
+                return PersoSubstate.SIM_SERVICE_PROVIDER;
+            case PERSOSUBSTATE_SIM_SIM:
+                return PersoSubstate.SIM_SIM;
+            case PERSOSUBSTATE_SIM_NETWORK_PUK:
+                return PersoSubstate.SIM_NETWORK_PUK;
+            case PERSOSUBSTATE_SIM_NETWORK_SUBSET_PUK:
+                return PersoSubstate.SIM_NETWORK_SUBSET_PUK;
+            case PERSOSUBSTATE_SIM_CORPORATE_PUK:
+                return PersoSubstate.SIM_CORPORATE_PUK;
+            case PERSOSUBSTATE_SIM_SERVICE_PROVIDER_PUK:
+                return PersoSubstate.SIM_SERVICE_PROVIDER_PUK;
+            case PERSOSUBSTATE_SIM_SIM_PUK:
+                return PersoSubstate.SIM_SIM_PUK;
+            case PERSOSUBSTATE_RUIM_NETWORK1:
+                return PersoSubstate.RUIM_NETWORK1;
+            case PERSOSUBSTATE_RUIM_NETWORK2:
+                return PersoSubstate.RUIM_NETWORK2;
+            case PERSOSUBSTATE_RUIM_HRPD:
+                return PersoSubstate.RUIM_HRPD;
+            case PERSOSUBSTATE_RUIM_CORPORATE:
+                return PersoSubstate.RUIM_CORPORATE;
+            case PERSOSUBSTATE_RUIM_SERVICE_PROVIDER:
+                return PersoSubstate.RUIM_SERVICE_PROVIDER;
+            case PERSOSUBSTATE_RUIM_RUIM:
+                return PersoSubstate.RUIM_RUIM;
+            case PERSOSUBSTATE_RUIM_NETWORK1_PUK:
+                return PersoSubstate.RUIM_NETWORK1_PUK;
+            case PERSOSUBSTATE_RUIM_NETWORK2_PUK:
+                return PersoSubstate.RUIM_NETWORK2_PUK;
+            case PERSOSUBSTATE_RUIM_HRPD_PUK:
+                return PersoSubstate.RUIM_HRPD_PUK;
+            case PERSOSUBSTATE_RUIM_CORPORATE_PUK:
+                return PersoSubstate.RUIM_CORPORATE_PUK;
+            case PERSOSUBSTATE_RUIM_SERVICE_PROVIDER_PUK:
+                return PersoSubstate.RUIM_SERVICE_PROVIDER_PUK;
+            case PERSOSUBSTATE_RUIM_RUIM_PUK:
+                return PersoSubstate.RUIM_RUIM_PUK;
+            case PERSOSUBSTATE_SIM_SPN:
+                return PersoSubstate.SIM_SPN;
+            case PERSOSUBSTATE_SIM_SPN_PUK:
+                return PersoSubstate.SIM_SPN_PUK;
+            case PERSOSUBSTATE_SIM_SP_EHPLMN:
+                return PersoSubstate.SIM_SP_EHPLMN;
+            case PERSOSUBSTATE_SIM_SP_EHPLMN_PUK:
+                return PersoSubstate.SIM_SP_EHPLMN_PUK;
+            case PERSOSUBSTATE_SIM_ICCID:
+                return PersoSubstate.SIM_ICCID;
+            case PERSOSUBSTATE_SIM_ICCID_PUK:
+                return PersoSubstate.SIM_ICCID_PUK;
+            case PERSOSUBSTATE_SIM_IMPI:
+                return PersoSubstate.SIM_IMPI;
+            case PERSOSUBSTATE_SIM_IMPI_PUK:
+                return PersoSubstate.SIM_IMPI_PUK;
+            case PERSOSUBSTATE_SIM_NS_SP:
+                return PersoSubstate.SIM_NS_SP;
+            case PERSOSUBSTATE_SIM_NS_SP_PUK:
+                return PersoSubstate.SIM_NS_SP_PUK;
+            default:
+                return PersoSubstate.UNKNOWN;
         }
     }
 
@@ -4849,7 +4960,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
     }
 
     /** Converts from AccessNetworkType in frameworks to RadioAccessNetworks in HAL. */
-    private static int convertAntToRan(int accessNetworkType) {
+    protected static int convertAntToRan(int accessNetworkType) {
         switch (accessNetworkType) {
             case AccessNetworkType.GERAN:
                 return RadioAccessNetworks.GERAN;
@@ -4987,9 +5098,9 @@ public class RIL extends BaseCommands implements CommandsInterface {
 
             req.cid = contextId;
 
-            if (packetData.dstAddress instanceof Inet4Address) {
+            if (packetData.getDstAddress() instanceof Inet4Address) {
                 req.type = android.hardware.radio.V1_1.KeepaliveType.NATT_IPV4;
-            } else if (packetData.dstAddress instanceof Inet6Address) {
+            } else if (packetData.getDstAddress() instanceof Inet6Address) {
                 req.type = android.hardware.radio.V1_1.KeepaliveType.NATT_IPV6;
             } else {
                 AsyncResult.forMessage(result, null,
@@ -4998,12 +5109,14 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return;
             }
 
+            final InetAddress srcAddress = packetData.getSrcAddress();
+            final InetAddress dstAddress = packetData.getDstAddress();
             appendPrimitiveArrayToArrayList(
-                    packetData.srcAddress.getAddress(), req.sourceAddress);
-            req.sourcePort = packetData.srcPort;
+                    srcAddress.getAddress(), req.sourceAddress);
+            req.sourcePort = packetData.getSrcPort();
             appendPrimitiveArrayToArrayList(
-                    packetData.dstAddress.getAddress(), req.destinationAddress);
-            req.destinationPort = packetData.dstPort;
+                    dstAddress.getAddress(), req.destinationAddress);
+            req.destinationPort = packetData.getDstPort();
             req.maxKeepaliveIntervalMillis = intervalMillis;
 
             radioProxy11.startKeepalive(rr.mSerial, req);
@@ -5837,7 +5950,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
     }
 
     @UnsupportedAppUsage
-    static String requestToString(int request) {
+    protected static String requestToString(int request) {
         switch(request) {
             case RIL_REQUEST_GET_SIM_STATUS:
                 return "GET_SIM_STATUS";
@@ -6150,6 +6263,9 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return "RIL_REQUEST_CDMA_SEND_SMS_EXPECT_MORE";
             case RIL_REQUEST_GET_BARRING_INFO:
                 return "RIL_REQUEST_GET_BARRING_INFO";
+            case RIL_REQUEST_ENTER_SIM_DEPERSONALIZATION:
+                return "RIL_REQUEST_ENTER_SIM_DEPERSONALIZATION";
+
             default: return "<unknown request>";
         }
     }

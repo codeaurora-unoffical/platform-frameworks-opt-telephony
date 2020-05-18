@@ -34,8 +34,8 @@ import android.hardware.radio.V1_0.RadioResponseInfo;
 import android.hardware.radio.V1_0.SendSmsResult;
 import android.hardware.radio.V1_0.VoiceRegStateResult;
 import android.hardware.radio.V1_4.CarrierRestrictionsWithPriority;
-import android.hardware.radio.V1_5.IRadioResponse;
 import android.hardware.radio.V1_4.SimLockMultiSimPolicy;
+import android.hardware.radio.V1_5.IRadioResponse;
 import android.os.AsyncResult;
 import android.os.Message;
 import android.os.SystemClock;
@@ -190,6 +190,18 @@ public class RadioResponse extends IRadioResponse.Stub {
     public void supplyNetworkDepersonalizationResponse(RadioResponseInfo responseInfo,
                                                        int retriesRemaining) {
         responseInts(responseInfo, retriesRemaining);
+    }
+
+
+    /**
+     * @param info Response info struct containing response type, serial no. and error
+     * @param persoType SIM Personalisation type
+     * @param remainingRetries postiive values indicates number of retries remaining,
+     * must be equal to -1 if number of retries is infinite.
+     */
+    public void supplySimDepersonalizationResponse(RadioResponseInfo info,
+            int persoType, int remainingRetries) {
+        responseInts(info, persoType, remainingRetries);
     }
 
     /**
@@ -2618,13 +2630,12 @@ public class RadioResponse extends IRadioResponse.Stub {
         }
     }
 
-    public void supplySimDepersonalizationResponse(RadioResponseInfo responseInfo,
-        int persoType, int remainingRetries) {
-        responseVoid(responseInfo);
-    }
-
+    /**
+     * @param responseInfo Response info struct containing response type, serial no. and error
+     * @param sms Response to sms sent as defined by SendSmsResult in types.hal
+     */
     public void sendCdmaSmsExpectMoreResponse(RadioResponseInfo responseInfo,
-        android.hardware.radio.V1_0.SendSmsResult result) {
-        responseVoid(responseInfo);
+            SendSmsResult sms) {
+        responseSms(responseInfo, sms);
     }
 }

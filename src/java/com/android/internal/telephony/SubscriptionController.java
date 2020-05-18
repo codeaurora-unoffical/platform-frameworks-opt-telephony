@@ -219,6 +219,9 @@ public class SubscriptionController extends ISub.Stub {
         // clear SLOT_INDEX for all subs
         clearSlotIndexForSubInfoRecords();
 
+        // Cache Setting values
+        cacheSettingValues();
+
         if (DBG) logdl("[SubscriptionController] init by Context");
     }
 
@@ -254,6 +257,26 @@ public class SubscriptionController extends ISub.Stub {
         mContext.getContentResolver().update(SubscriptionManager.CONTENT_URI, value, null, null);
     }
 
+    /**
+     * Cache the Settings values by reading these values from Setting from disk to prevent disk I/O
+     * access during the API calling. This is based on an assumption that the Settings system will
+     * itself cache this value after the first read and thus only the first read after boot will
+     * access the disk.
+     */
+    private void cacheSettingValues() {
+        Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.MULTI_SIM_SMS_SUBSCRIPTION,
+                        SubscriptionManager.INVALID_SUBSCRIPTION_ID);
+
+        Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.MULTI_SIM_VOICE_CALL_SUBSCRIPTION,
+                        SubscriptionManager.INVALID_SUBSCRIPTION_ID);
+
+        Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.MULTI_SIM_DATA_CALL_SUBSCRIPTION,
+                        SubscriptionManager.INVALID_SUBSCRIPTION_ID);
+    }
+
     @UnsupportedAppUsage
     protected void enforceModifyPhoneState(String message) {
         mContext.enforceCallingOrSelfPermission(
@@ -279,6 +302,20 @@ public class SubscriptionController extends ISub.Stub {
             // A SecurityException indicates that the calling package is targeting at least the
             // minimum level that enforces identifier access restrictions and the new access
             // requirements are not met.
+            return false;
+        }
+    }
+
+    /**
+     * Returns whether the {@code callingPackage} has access to the phone number on the specified
+     * {@code subId} using the provided {@code message} in any resulting SecurityException.
+     */
+    private boolean hasPhoneNumberAccess(int subId, String callingPackage, String callingFeatureId,
+            String message) {
+        try {
+            return TelephonyPermissions.checkCallingOrSelfReadPhoneNumber(mContext, subId,
+                    callingPackage, callingFeatureId, message);
+        } catch (SecurityException e) {
             return false;
         }
     }
@@ -493,7 +530,7 @@ public class SubscriptionController extends ISub.Stub {
     private int getUnusedColor(String callingPackage, String callingFeatureId) {
         List<SubscriptionInfo> availableSubInfos = getActiveSubscriptionInfoList(callingPackage,
                 callingFeatureId);
-        colorArr = mContext.getResources().getIntArray(android.R.array.simColors);
+        colorArr = mContext.getResources().getIntArray(com.android.internal.R.array.sim_colors);
         int colorIdx = 0;
 
         if (availableSubInfos != null) {
@@ -1293,9 +1330,6 @@ public class SubscriptionController extends ISub.Stub {
 
                     if (DBG) logdl("[addSubInfoRecord] sim name = " + nameToSet);
                 }
-
-                // Once the records are loaded, notify DcTracker
-                PhoneFactory.getPhone(slotIndex).updateDataConnectionTracker();
 
                 if (DBG) logdl("[addSubInfoRecord]- info size=" + sSlotIndexToSubIds.size());
             }
@@ -2405,9 +2439,6 @@ public class SubscriptionController extends ISub.Stub {
                 }
             }
 
-            // FIXME is this still needed?
-            updateAllDataConnectionTrackers();
-
             int previousDefaultSub = getDefaultSubId();
             Settings.Global.putInt(mContext.getContentResolver(),
                     Settings.Global.MULTI_SIM_DATA_CALL_SUBSCRIPTION, subId);
@@ -2418,17 +2449,6 @@ public class SubscriptionController extends ISub.Stub {
             }
         } finally {
             Binder.restoreCallingIdentity(identity);
-        }
-    }
-
-    @UnsupportedAppUsage
-    protected void updateAllDataConnectionTrackers() {
-        // Tell Phone Proxies to update data connection tracker
-        int len = TelephonyManager.from(mContext).getActiveModemCount();
-        if (DBG) logd("[updateAllDataConnectionTrackers] activeModemCount=" + len);
-        for (int phoneId = 0; phoneId < len; phoneId++) {
-            if (DBG) logd("[updateAllDataConnectionTrackers] phoneId=" + phoneId);
-            PhoneFactory.getPhone(phoneId).updateDataConnectionTracker();
         }
     }
 
@@ -3409,7 +3429,7 @@ public class SubscriptionController extends ISub.Stub {
      * Helper function to create selection argument of a list of subId.
      * The result should be: "in (subId1, subId2, ...)".
      */
-    private String getSelectionForSubIdList(int[] subId) {
+    public static String getSelectionForSubIdList(int[] subId) {
         StringBuilder selection = new StringBuilder();
         selection.append(SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID);
         selection.append(" IN (");
@@ -3478,7 +3498,7 @@ public class SubscriptionController extends ISub.Stub {
                     callingPackage, callingFeatureId, "getSubscriptionsInGroup")
                     || info.canManageSubscription(mContext, callingPackage);
         }).map(subscriptionInfo -> conditionallyRemoveIdentifiers(subscriptionInfo,
-                callingPackage, callingFeatureId, "getSubscriptionInfoList"))
+                callingPackage, callingFeatureId, "getSubscriptionsInGroup"))
         .collect(Collectors.toList());
 
     }
@@ -3744,30 +3764,7 @@ public class SubscriptionController extends ISub.Stub {
     // They are doing similar things except operating on different cache.
     private List<SubscriptionInfo> getSubscriptionInfoListFromCacheHelper(
             String callingPackage, String callingFeatureId, List<SubscriptionInfo> cacheSubList) {
-        boolean canReadAllPhoneState;
-        try {
-            canReadAllPhoneState = TelephonyPermissions.checkReadPhoneState(mContext,
-                    SubscriptionManager.INVALID_SUBSCRIPTION_ID, Binder.getCallingPid(),
-                    Binder.getCallingUid(), callingPackage, callingFeatureId,
-                    "getSubscriptionInfoList");
-            // If the calling package has the READ_PHONE_STATE permission then check if the caller
-            // also has access to subscriber identifiers to ensure that the ICC ID and any other
-            // unique identifiers are removed if the caller should not have access.
-            if (canReadAllPhoneState) {
-                canReadAllPhoneState = hasSubscriberIdentifierAccess(
-                        SubscriptionManager.INVALID_SUBSCRIPTION_ID, callingPackage,
-                        callingFeatureId, "getSubscriptionInfoList");
-            }
-        } catch (SecurityException e) {
-            canReadAllPhoneState = false;
-        }
-
         synchronized (mSubInfoListLock) {
-            // If the caller can read all phone state, just return the full list.
-            if (canReadAllPhoneState) {
-                return new ArrayList<>(cacheSubList);
-            }
-
             // Filter the list to only include subscriptions which the caller can manage.
             return cacheSubList.stream()
                     .filter(subscriptionInfo -> {
@@ -3796,10 +3793,20 @@ public class SubscriptionController extends ISub.Stub {
     private SubscriptionInfo conditionallyRemoveIdentifiers(SubscriptionInfo subInfo,
             String callingPackage, String callingFeatureId, String message) {
         SubscriptionInfo result = subInfo;
-        if (!hasSubscriberIdentifierAccess(subInfo.getSubscriptionId(), callingPackage,
-                callingFeatureId, message)) {
+        int subId = subInfo.getSubscriptionId();
+        boolean hasIdentifierAccess = hasSubscriberIdentifierAccess(subId, callingPackage,
+                callingFeatureId, message);
+        boolean hasPhoneNumberAccess = hasPhoneNumberAccess(subId, callingPackage, callingFeatureId,
+                message);
+        if (!hasIdentifierAccess || !hasPhoneNumberAccess) {
             result = new SubscriptionInfo(subInfo);
-            result.clearIccId();
+            if (!hasIdentifierAccess) {
+                result.clearIccId();
+                result.clearCardString();
+            }
+            if (!hasPhoneNumberAccess) {
+                result.clearNumber();
+            }
         }
         return result;
     }
