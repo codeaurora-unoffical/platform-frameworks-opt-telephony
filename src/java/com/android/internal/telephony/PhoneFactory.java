@@ -44,6 +44,7 @@ import com.android.internal.telephony.euicc.EuiccCardController;
 import com.android.internal.telephony.euicc.EuiccController;
 import com.android.internal.telephony.imsphone.ImsPhone;
 import com.android.internal.telephony.imsphone.ImsPhoneFactory;
+import com.android.internal.telephony.metrics.MetricsCollector;
 import com.android.internal.telephony.metrics.TelephonyMetrics;
 import com.android.internal.telephony.sip.SipPhone;
 import com.android.internal.telephony.sip.SipPhoneFactory;
@@ -96,6 +97,7 @@ public class PhoneFactory {
     static private CellularNetworkValidator sCellularNetworkValidator;
 
     static private final HashMap<String, LocalLog>sLocalLogs = new HashMap<String, LocalLog>();
+    private static MetricsCollector sMetricsCollector;
 
     //***** Class Methods
 
@@ -143,6 +145,9 @@ public class PhoneFactory {
                     }
                 }
 
+                // register statsd pullers.
+                sMetricsCollector = new MetricsCollector(context);
+
                 sPhoneNotifier = new DefaultPhoneNotifier(context);
                 TelephonyComponentFactory telephonyComponentFactory
                         = TelephonyComponentFactory.getInstance();
@@ -177,7 +182,7 @@ public class PhoneFactory {
                 Rlog.i(LOG_TAG, "Creating SubscriptionController");
                 TelephonyComponentFactory.getInstance().inject(SubscriptionController.class.
                         getName()).initSubscriptionController(context);
-                telephonyComponentFactory.inject(MultiSimSettingController.class.
+                TelephonyComponentFactory.getInstance().inject(MultiSimSettingController.class.
                         getName()).initMultiSimSettingController(context,
                         SubscriptionController.getInstance());
 
@@ -231,7 +236,7 @@ public class PhoneFactory {
                 Rlog.i(LOG_TAG, "Creating SubInfoRecordUpdater ");
                 HandlerThread pfhandlerThread = new HandlerThread("PhoneFactoryHandlerThread");
                 pfhandlerThread.start();
-                sSubInfoRecordUpdater = telephonyComponentFactory.inject(
+                sSubInfoRecordUpdater = TelephonyComponentFactory.getInstance().inject(
                         SubscriptionInfoUpdater.class.getName()).
                         makeSubscriptionInfoUpdater(pfhandlerThread.
                         getLooper(), context, sCommandsInterfaces);
@@ -545,6 +550,11 @@ public class PhoneFactory {
             }
             sLocalLogs.get(key).log(log);
         }
+    }
+
+    /** Returns the MetricsCollector instance. */
+    public static MetricsCollector getMetricsCollector() {
+        return sMetricsCollector;
     }
 
     public static void dump(FileDescriptor fd, PrintWriter printwriter, String[] args) {

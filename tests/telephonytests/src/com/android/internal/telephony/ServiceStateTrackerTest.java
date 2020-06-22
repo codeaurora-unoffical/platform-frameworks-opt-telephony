@@ -315,9 +315,9 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         mBundle.putIntArray(CarrierConfigManager.KEY_5G_NR_SSRSRQ_THRESHOLDS_INT_ARRAY,
                 new int[] {
                     -16, /* SIGNAL_STRENGTH_POOR */
-                    -11, /* SIGNAL_STRENGTH_MODERATE */
+                    -12, /* SIGNAL_STRENGTH_MODERATE */
                     -9, /* SIGNAL_STRENGTH_GOOD */
-                    -7  /* SIGNAL_STRENGTH_GREAT */
+                    -6  /* SIGNAL_STRENGTH_GREAT */
                 });
         mBundle.putIntArray(CarrierConfigManager.KEY_5G_NR_SSSINR_THRESHOLDS_INT_ARRAY,
                 new int[] {
@@ -334,6 +334,9 @@ public class ServiceStateTrackerTest extends TelephonyTest {
         sst = null;
         mSSTTestHandler.quit();
         mSSTTestHandler.join();
+        if (mCellularNetworkService != null) {
+            mCellularNetworkService.onDestroy();
+        }
         super.tearDown();
     }
 
@@ -2615,5 +2618,78 @@ public class ServiceStateTrackerTest extends TelephonyTest {
 
         List<Intent> intents = intentArgumentCaptor.getAllValues();
         return intents.get(intents.size() - 1).getExtras();
+    }
+
+    private static NetworkRegistrationInfo makeNetworkRegistrationInfo(
+            int domain, int transport, CellIdentity ci, boolean isRegistered) {
+        return new NetworkRegistrationInfo.Builder()
+                .setDomain(domain)
+                .setTransportType(transport)
+                .setCellIdentity(ci)
+                .setRegistrationState(isRegistered
+                        ? NetworkRegistrationInfo.REGISTRATION_STATE_HOME
+                        : NetworkRegistrationInfo.REGISTRATION_STATE_NOT_REGISTERED_OR_SEARCHING)
+                .build();
+    }
+
+    @Test
+    public void testCellIdentitySort() {
+        final CellIdentityLte cellIdentityLte =
+                new CellIdentityLte(1, 1, 5, 1, new int[] {1, 2}, 5000, "001", "01", "test",
+                        "tst", Collections.emptyList(), null);
+        final CellIdentityGsm cellIdentityGsm = new CellIdentityGsm(
+                2, 3, 900, 5, "001", "01", "test", "tst", Collections.emptyList());
+
+        ServiceState ss = new ServiceState();
+        List<CellIdentity> cids;
+
+        // Test that PS WWAN is reported if available
+        ss.addNetworkRegistrationInfo(makeNetworkRegistrationInfo(
+                NetworkRegistrationInfo.DOMAIN_PS,
+                AccessNetworkConstants.TRANSPORT_TYPE_WWAN,
+                cellIdentityLte, false));
+        cids = ServiceStateTracker.getPrioritizedCellIdentities(ss);
+        assertEquals(cids.size(), 1);
+        assertEquals(cids.get(0), cellIdentityLte);
+
+        // Test that CS is prioritized over PS
+        ss.addNetworkRegistrationInfo(makeNetworkRegistrationInfo(
+                NetworkRegistrationInfo.DOMAIN_CS,
+                AccessNetworkConstants.TRANSPORT_TYPE_WWAN,
+                cellIdentityGsm, false));
+        cids = ServiceStateTracker.getPrioritizedCellIdentities(ss);
+        assertEquals(cids.size(), 2);
+        assertEquals(cids.get(0), cellIdentityGsm);
+        assertEquals(cids.get(1), cellIdentityLte);
+
+        // Test that WLAN is ignored
+        ss.addNetworkRegistrationInfo(makeNetworkRegistrationInfo(
+                NetworkRegistrationInfo.DOMAIN_PS,
+                AccessNetworkConstants.TRANSPORT_TYPE_WLAN,
+                cellIdentityGsm, false));
+        cids = ServiceStateTracker.getPrioritizedCellIdentities(ss);
+        assertEquals(cids.size(), 2);
+        assertEquals(cids.get(0), cellIdentityGsm);
+        assertEquals(cids.get(1), cellIdentityLte);
+
+        // Test that null CellIdentities are ignored
+        ss.addNetworkRegistrationInfo(makeNetworkRegistrationInfo(
+                NetworkRegistrationInfo.DOMAIN_CS,
+                AccessNetworkConstants.TRANSPORT_TYPE_WLAN,
+                null, false));
+        cids = ServiceStateTracker.getPrioritizedCellIdentities(ss);
+        assertEquals(cids.size(), 2);
+        assertEquals(cids.get(0), cellIdentityGsm);
+        assertEquals(cids.get(1), cellIdentityLte);
+
+        // Test that registered networks are prioritized over unregistered
+        ss.addNetworkRegistrationInfo(makeNetworkRegistrationInfo(
+                NetworkRegistrationInfo.DOMAIN_PS,
+                AccessNetworkConstants.TRANSPORT_TYPE_WWAN,
+                cellIdentityLte, true));
+        cids = ServiceStateTracker.getPrioritizedCellIdentities(ss);
+        assertEquals(cids.size(), 2);
+        assertEquals(cids.get(0), cellIdentityLte);
+        assertEquals(cids.get(1), cellIdentityGsm);
     }
 }

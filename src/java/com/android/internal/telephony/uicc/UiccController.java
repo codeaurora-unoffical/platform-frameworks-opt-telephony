@@ -37,6 +37,7 @@ import android.os.storage.StorageManager;
 import android.preference.PreferenceManager;
 import android.sysprop.TelephonyProperties;
 import android.telephony.CarrierConfigManager;
+import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.telephony.UiccCardInfo;
 import android.text.TextUtils;
@@ -533,7 +534,9 @@ public class UiccController extends Handler {
                     break;
                 case EVENT_MULTI_SIM_CONFIG_CHANGED:
                     if (DBG) log("Received EVENT_MULTI_SIM_CONFIG_CHANGED");
-                    onMultiSimConfigChanged();
+                    int activeModemCount = (int) ((AsyncResult) msg.obj).result;
+                    onMultiSimConfigChanged(activeModemCount);
+                    break;
                 default:
                     Rlog.e(LOG_TAG, " Unknown Event " + msg.what);
                     break;
@@ -541,10 +544,9 @@ public class UiccController extends Handler {
         }
     }
 
-    private void onMultiSimConfigChanged() {
+    private void onMultiSimConfigChanged(int newActiveModemCount) {
         int prevActiveModemCount = mCis.length;
         mCis = PhoneFactory.getCommandsInterfaces();
-        int newActiveModemCount = mCis.length;
 
         logWithLocalLog("onMultiSimConfigChanged: prevActiveModemCount " + prevActiveModemCount
                 + ", newActiveModemCount " + newActiveModemCount);
@@ -641,23 +643,33 @@ public class UiccController extends Handler {
         }
     }
 
-    static void updateInternalIccState(Context context, IccCardConstants.State state, String reason,
-            int phoneId) {
-        updateInternalIccState(context, state, reason, phoneId, false);
+    static void updateInternalIccStateForInactiveSlot(
+            Context context, int prevActivePhoneId, String iccId) {
+        if (SubscriptionManager.isValidPhoneId(prevActivePhoneId)) {
+            // Mark SIM state as ABSENT on previously phoneId.
+            TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(
+                    Context.TELEPHONY_SERVICE);
+            telephonyManager.setSimStateForPhone(prevActivePhoneId,
+                    IccCardConstants.State.ABSENT.toString());
+        }
+
+        SubscriptionInfoUpdater subInfoUpdator = PhoneFactory.getSubscriptionInfoUpdater();
+        if (subInfoUpdator != null) {
+            subInfoUpdator.updateInternalIccStateForInactiveSlot(prevActivePhoneId, iccId);
+        } else {
+            Rlog.e(LOG_TAG, "subInfoUpdate is null.");
+        }
     }
 
-    // absentAndInactive is a special case when we need to update subscriptions but don't want to
-    // broadcast a state change
     static void updateInternalIccState(Context context, IccCardConstants.State state, String reason,
-            int phoneId, boolean absentAndInactive) {
+            int phoneId) {
         TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(
                 Context.TELEPHONY_SERVICE);
         telephonyManager.setSimStateForPhone(phoneId, state.toString());
 
         SubscriptionInfoUpdater subInfoUpdator = PhoneFactory.getSubscriptionInfoUpdater();
         if (subInfoUpdator != null) {
-            subInfoUpdator.updateInternalIccState(getIccStateIntentString(state),
-                    reason, phoneId, absentAndInactive);
+            subInfoUpdator.updateInternalIccState(getIccStateIntentString(state), reason, phoneId);
         } else {
             Rlog.e(LOG_TAG, "subInfoUpdate is null.");
         }
@@ -993,7 +1005,7 @@ public class UiccController extends Handler {
                     if (!TextUtils.isEmpty(eid)) {
                         isDefaultEuiccCardIdSet = true;
                         mDefaultEuiccCardId = convertToPublicCardId(eid);
-                        log("Using eid=" + eid + " from removable eUICC in slot="
+                        logWithLocalLog("Using eid=" + eid + " from removable eUICC in slot="
                                 + i + " to set mDefaultEuiccCardId=" + mDefaultEuiccCardId);
                         break;
                     }
@@ -1002,16 +1014,40 @@ public class UiccController extends Handler {
         }
 
         if (mHasBuiltInEuicc && !anyEuiccIsActive && !isDefaultEuiccCardIdSet) {
-            log("onGetSlotStatusDone: setting TEMPORARILY_UNSUPPORTED_CARD_ID");
+            logWithLocalLog(
+                    "onGetSlotStatusDone: mDefaultEuiccCardId=TEMPORARILY_UNSUPPORTED_CARD_ID");
             isDefaultEuiccCardIdSet = true;
             mDefaultEuiccCardId = TEMPORARILY_UNSUPPORTED_CARD_ID;
         }
 
 
         if (!isDefaultEuiccCardIdSet) {
-            // no known eUICCs at all (it's possible that an eUICC is inserted and we just don't
-            // know it's EID)
-            mDefaultEuiccCardId = UNINITIALIZED_CARD_ID;
+            if (mDefaultEuiccCardId >= 0) {
+                // if mDefaultEuiccCardId has already been set to an actual eUICC,
+                // don't overwrite mDefaultEuiccCardId unless that eUICC is no longer inserted
+                boolean defaultEuiccCardIdIsStillInserted = false;
+                String cardString = mCardStrings.get(mDefaultEuiccCardId);
+                for (UiccSlot slot : mUiccSlots) {
+                    if (slot.getUiccCard() == null) {
+                        continue;
+                    }
+                    if (cardString.equals(
+                            IccUtils.stripTrailingFs(slot.getUiccCard().getCardId()))) {
+                        defaultEuiccCardIdIsStillInserted = true;
+                    }
+                }
+                if (!defaultEuiccCardIdIsStillInserted) {
+                    logWithLocalLog("onGetSlotStatusDone: mDefaultEuiccCardId="
+                            + mDefaultEuiccCardId
+                            + " is no longer inserted. Setting mDefaultEuiccCardId=UNINITIALIZED");
+                    mDefaultEuiccCardId = UNINITIALIZED_CARD_ID;
+                }
+            } else {
+                // no known eUICCs at all (it's possible that an eUICC is inserted and we just don't
+                // know it's EID)
+                logWithLocalLog("onGetSlotStatusDone: mDefaultEuiccCardId=UNINITIALIZED");
+                mDefaultEuiccCardId = UNINITIALIZED_CARD_ID;
+            }
         }
 
         if (VDBG) logPhoneIdToSlotIdMapping();

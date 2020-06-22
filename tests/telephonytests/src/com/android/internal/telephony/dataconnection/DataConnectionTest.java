@@ -18,6 +18,7 @@ package com.android.internal.telephony.dataconnection;
 
 import static android.net.NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED;
+import static android.net.NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED;
 import static android.net.NetworkPolicyManager.SUBSCRIPTION_OVERRIDE_CONGESTED;
 import static android.net.NetworkPolicyManager.SUBSCRIPTION_OVERRIDE_UNMETERED;
 
@@ -98,6 +99,7 @@ public class DataConnectionTest extends TelephonyTest {
     private DataConnection mDc;
     private DataConnectionTestHandler mDataConnectionTestHandler;
     private DcController mDcc;
+    private CellularDataService mCellularDataService;
 
     private ApnSetting mApn1 = ApnSetting.makeApnSetting(
             2163,                   // id
@@ -260,7 +262,7 @@ public class DataConnectionTest extends TelephonyTest {
     }
 
     private void addDataService() {
-        CellularDataService cellularDataService = new CellularDataService();
+        mCellularDataService = new CellularDataService();
         ServiceInfo serviceInfo = new ServiceInfo();
         serviceInfo.packageName = "com.android.phone";
         serviceInfo.permission = "android.permission.BIND_TELEPHONY_DATA_SERVICE";
@@ -269,7 +271,7 @@ public class DataConnectionTest extends TelephonyTest {
                 DataService.SERVICE_INTERFACE,
                 null,
                 "com.android.phone",
-                cellularDataService.mBinder,
+                mCellularDataService.mBinder,
                 serviceInfo,
                 filter);
     }
@@ -322,6 +324,7 @@ public class DataConnectionTest extends TelephonyTest {
         mDcc = null;
         mDataConnectionTestHandler.quit();
         mDataConnectionTestHandler.join();
+        mCellularDataService.onDestroy();
         super.tearDown();
     }
 
@@ -613,8 +616,8 @@ public class DataConnectionTest extends TelephonyTest {
 
         testConnectEvent();
 
-        assertFalse(getNetworkCapabilities()
-                .hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED));
+        assertFalse(getNetworkCapabilities().hasCapability(NET_CAPABILITY_NOT_METERED));
+        assertFalse(getNetworkCapabilities().hasCapability(NET_CAPABILITY_TEMPORARILY_NOT_METERED));
     }
 
     @Test
@@ -628,8 +631,7 @@ public class DataConnectionTest extends TelephonyTest {
 
         testConnectEvent();
 
-        assertTrue(getNetworkCapabilities()
-                .hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED));
+        assertTrue(getNetworkCapabilities().hasCapability(NET_CAPABILITY_NOT_METERED));
     }
 
     @Test
@@ -639,18 +641,18 @@ public class DataConnectionTest extends TelephonyTest {
                 new String[] { "default" });
         testConnectEvent();
 
-        assertFalse(getNetworkCapabilities().hasCapability(NET_CAPABILITY_NOT_METERED));
+        assertFalse(getNetworkCapabilities().hasCapability(NET_CAPABILITY_TEMPORARILY_NOT_METERED));
         assertTrue(getNetworkCapabilities().hasCapability(NET_CAPABILITY_NOT_CONGESTED));
 
         mDc.onSubscriptionOverride(SUBSCRIPTION_OVERRIDE_UNMETERED,
                 SUBSCRIPTION_OVERRIDE_UNMETERED);
 
-        assertTrue(getNetworkCapabilities().hasCapability(NET_CAPABILITY_NOT_METERED));
+        assertTrue(getNetworkCapabilities().hasCapability(NET_CAPABILITY_TEMPORARILY_NOT_METERED));
         assertTrue(getNetworkCapabilities().hasCapability(NET_CAPABILITY_NOT_CONGESTED));
 
         mDc.onSubscriptionOverride(SUBSCRIPTION_OVERRIDE_UNMETERED, 0);
 
-        assertFalse(getNetworkCapabilities().hasCapability(NET_CAPABILITY_NOT_METERED));
+        assertFalse(getNetworkCapabilities().hasCapability(NET_CAPABILITY_TEMPORARILY_NOT_METERED));
         assertTrue(getNetworkCapabilities().hasCapability(NET_CAPABILITY_NOT_CONGESTED));
     }
 

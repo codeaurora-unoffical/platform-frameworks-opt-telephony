@@ -1025,11 +1025,13 @@ public class ImsPhoneConnection extends Connection implements
                         startRttTextProcessing();
                         onRttInitiated();
                         changed = true;
+                        mOwner.getPhone().getVoiceCallSessionStats().onRttStarted(this);
                     } else if (!mIsRttEnabledForCall && mRttTextHandler != null) {
                         Rlog.d(LOG_TAG, "updateMediaCapabilities -- turning RTT off, profile="
                                 + negotiatedCallProfile);
                         mRttTextHandler.tearDown();
                         mRttTextHandler = null;
+                        mRttTextStream = null;
                         onRttTerminated();
                         changed = true;
                     }
@@ -1083,6 +1085,7 @@ public class ImsPhoneConnection extends Connection implements
                     && localCallProfile.mMediaProfile.mAudioQuality != mAudioCodec) {
                 mAudioCodec = localCallProfile.mMediaProfile.mAudioQuality;
                 mMetrics.writeAudioCodecIms(mOwner.mPhone.getPhoneId(), imsCall.getCallSession());
+                mOwner.getPhone().getVoiceCallSessionStats().onAudioCodecChanged(this, mAudioCodec);
             }
 
             int newAudioQuality =
@@ -1233,9 +1236,10 @@ public class ImsPhoneConnection extends Connection implements
      * @param extras The ImsCallProfile extras.
      */
     private void updateImsCallRatFromExtras(Bundle extras) {
-        if (extras.containsKey(ImsCallProfile.EXTRA_CALL_NETWORK_TYPE)
+        if (extras != null &&
+            (extras.containsKey(ImsCallProfile.EXTRA_CALL_NETWORK_TYPE)
                 || extras.containsKey(ImsCallProfile.EXTRA_CALL_RAT_TYPE)
-                || extras.containsKey(ImsCallProfile.EXTRA_CALL_RAT_TYPE_ALT)) {
+                || extras.containsKey(ImsCallProfile.EXTRA_CALL_RAT_TYPE_ALT))) {
 
             ImsCall call = getImsCall();
             int networkType = TelephonyManager.NETWORK_TYPE_UNKNOWN;
@@ -1249,7 +1253,7 @@ public class ImsPhoneConnection extends Connection implements
     }
 
     private void updateEmergencyCallFromExtras(Bundle extras) {
-        if (extras.getBoolean(ImsCallProfile.EXTRA_EMERGENCY_CALL)) {
+        if (extras != null && extras.getBoolean(ImsCallProfile.EXTRA_EMERGENCY_CALL)) {
             setIsNetworkIdentifiedEmergencyCall(true);
         }
     }

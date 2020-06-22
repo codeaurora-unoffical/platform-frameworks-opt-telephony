@@ -33,6 +33,7 @@ import android.os.Message;
 import android.os.PersistableBundle;
 import android.os.Registrant;
 import android.os.RegistrantList;
+import android.os.ResultReceiver;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.os.WorkSource;
@@ -80,6 +81,7 @@ import com.android.internal.telephony.dataconnection.TransportManager;
 import com.android.internal.telephony.EcbmHandler;
 import com.android.internal.telephony.emergency.EmergencyNumberTracker;
 import com.android.internal.telephony.imsphone.ImsPhoneCall;
+import com.android.internal.telephony.metrics.VoiceCallSessionStats;
 import com.android.internal.telephony.test.SimulatedRadioControl;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppType;
 import com.android.internal.telephony.uicc.IccFileHandler;
@@ -129,6 +131,8 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     public static final String NETWORK_SELECTION_NAME_KEY = "network_selection_name_key";
     // Key used to read and write the saved network selection operator short name
     public static final String NETWORK_SELECTION_SHORT_KEY = "network_selection_short_key";
+    public static final String KEY_DO_NOT_SHOW_LIMITED_SERVICE_ALERT
+            = "key_do_not_show_limited_service_alert";
 
 
     // Key used to read/write "disable data connection on boot" pref (used for testing)
@@ -206,12 +210,13 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     protected static final int EVENT_DEVICE_PROVISIONING_DATA_SETTING_CHANGE = 50;
     protected static final int EVENT_GET_AVAILABLE_NETWORKS_DONE    = 51;
 
-    private static final int EVENT_ALL_DATA_DISCONNECTED            = 52;
-    protected static final int EVENT_UICC_APPS_ENABLEMENT_CHANGED   = 53;
-    protected static final int EVENT_GET_UICC_APPS_ENABLEMENT_DONE  = 54;
-    protected static final int EVENT_REAPPLY_UICC_APPS_ENABLEMENT_DONE = 55;
-    protected static final int EVENT_REGISTRATION_FAILED = 56;
-    protected static final int EVENT_BARRING_INFO_CHANGED = 57;
+    private static final int EVENT_ALL_DATA_DISCONNECTED                  = 52;
+    protected static final int EVENT_UICC_APPS_ENABLEMENT_STATUS_CHANGED  = 53;
+    protected static final int EVENT_UICC_APPS_ENABLEMENT_SETTING_CHANGED = 54;
+    protected static final int EVENT_GET_UICC_APPS_ENABLEMENT_DONE        = 55;
+    protected static final int EVENT_REAPPLY_UICC_APPS_ENABLEMENT_DONE    = 56;
+    protected static final int EVENT_REGISTRATION_FAILED = 57;
+    protected static final int EVENT_BARRING_INFO_CHANGED = 58;
 
     protected static final int EVENT_LAST = EVENT_BARRING_INFO_CHANGED;
 
@@ -317,6 +322,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     private final String mActionDetached;
     private final String mActionAttached;
     protected DeviceStateMonitor mDeviceStateMonitor;
+    protected DisplayInfoController mDisplayInfoController;
     protected TransportManager mTransportManager;
     protected DataEnabledSettings mDataEnabledSettings;
     // Used for identify the carrier of current subscription
@@ -422,6 +428,8 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     private boolean mUnitTestMode;
 
     private final CarrierPrivilegesTracker mCarrierPrivilegesTracker;
+
+    protected VoiceCallSessionStats mVoiceCallSessionStats;
 
     public IccRecords getIccRecords() {
         return mIccRecords.get();
@@ -992,6 +1000,17 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
             mLocalLog.log("isInEmergencySmsMode: queried while eSMS mode is active.");
         }
         return isInEmergencySmsMode;
+    }
+
+    public void migrateUssdFrom(Phone from, String num, ResultReceiver wrappedCallback)
+            throws UnsupportedOperationException {
+        try {
+            notifyMigrateUssd(num, wrappedCallback);
+            migrate(mMmiRegistrants, from.mMmiRegistrants);
+        } catch (UnsupportedOperationException e) {
+            Rlog.e(LOG_TAG, "Error: " + e);
+            throw e;
+        }
     }
 
     protected void migrateFrom(Phone from) {
@@ -1819,6 +1838,20 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     }
 
     /**
+     * Retrieves the DeviceStateMonitor of the phone instance.
+     */
+    public DeviceStateMonitor getDeviceStateMonitor() {
+        return null;
+    }
+
+    /**
+     * Retrieves the DisplayInfoController of the phone instance.
+     */
+    public DisplayInfoController getDisplayInfoController() {
+        return null;
+    }
+
+    /**
      * Update voice activation state
      */
     public void setVoiceActivationState(int state) {
@@ -2212,12 +2245,23 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     }
 
     /**
-     *  Query the preferred network type setting
+     * Query the preferred network type setting
      *
      * @param response is callback message to report one of  NT_*_TYPE
      */
     public void getPreferredNetworkType(Message response) {
         mCi.getPreferredNetworkType(response);
+    }
+
+    /**
+     * Get the cached value of the preferred network type setting
+     */
+    public int getCachedPreferredNetworkType() {
+        if (mCi != null && mCi instanceof BaseCommands) {
+            return ((BaseCommands) mCi).mPreferredNetworkType;
+        } else {
+            return RILConstants.PREFERRED_NETWORK_MODE;
+        }
     }
 
     /**
@@ -2498,6 +2542,12 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         mCellInfoRegistrants.notifyRegistrants(ar);
 
         mNotifier.notifyCellInfo(this, cellInfo);
+    }
+
+    protected void notifyMigrateUssd(String num, ResultReceiver wrappedCallback)
+            throws UnsupportedOperationException {
+        // notifyMigrateUssd shall be overriden by GsmCdmaPhone
+        throw new UnsupportedOperationException("notifyMigrateUssd: not supported");
     }
 
     /**
@@ -4291,6 +4341,17 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         return "";
     }
 
+    /** Returns the {@link VoiceCallSessionStats} for this phone ID. */
+    public VoiceCallSessionStats getVoiceCallSessionStats() {
+        return mVoiceCallSessionStats;
+    }
+
+    /** Sets the {@link VoiceCallSessionStats} mock for this phone ID during unit testing. */
+    @VisibleForTesting
+    public void setVoiceCallSessionStats(VoiceCallSessionStats voiceCallSessionStats) {
+        mVoiceCallSessionStats = voiceCallSessionStats;
+    }
+
     /** @hide */
     public CarrierPrivilegesTracker getCarrierPrivilegesTracker() {
         return mCarrierPrivilegesTracker;
@@ -4333,8 +4394,6 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         pw.println(" isInEmergencySmsMode=" + isInEmergencySmsMode());
         pw.println(" isEcmCanceledForEmergency=" + isEcmCanceledForEmergency());
         pw.println(" service state=" + getServiceState());
-        String privilegedUids = Arrays.toString(mCarrierPrivilegesTracker.mPrivilegedUids);
-        pw.println(" administratorUids=" + privilegedUids);
         pw.flush();
         pw.println("++++++++++++++++++++++++++++++++");
 
@@ -4373,6 +4432,17 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         if (getEmergencyNumberTracker() != null) {
             try {
                 getEmergencyNumberTracker().dump(fd, pw, args);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            pw.flush();
+            pw.println("++++++++++++++++++++++++++++++++");
+        }
+
+        if (getDisplayInfoController() != null) {
+            try {
+                getDisplayInfoController().dump(fd, pw, args);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -4454,6 +4524,12 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
             }
 
             pw.flush();
+            pw.println("++++++++++++++++++++++++++++++++");
+        }
+
+        if (getCarrierPrivilegesTracker() != null) {
+            pw.println("CarrierPrivilegesTracker:");
+            getCarrierPrivilegesTracker().dump(fd, pw, args);
             pw.println("++++++++++++++++++++++++++++++++");
         }
 

@@ -211,7 +211,7 @@ public class CarrierKeyDownloadManager extends Handler {
         int slotId = mPhone.getPhoneId();
         Intent intent = new Intent(INTENT_KEY_RENEWAL_ALARM_PREFIX + slotId);
         PendingIntent carrierKeyDownloadIntent = PendingIntent.getBroadcast(mContext, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT);
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         AlarmManager alarmManager =
                 (AlarmManager) mContext.getSystemService(mContext.ALARM_SERVICE);
         alarmManager.cancel(carrierKeyDownloadIntent);
@@ -271,7 +271,7 @@ public class CarrierKeyDownloadManager extends Handler {
                 Context.ALARM_SERVICE);
         Intent intent = new Intent(INTENT_KEY_RENEWAL_ALARM_PREFIX + slotId);
         PendingIntent carrierKeyDownloadIntent = PendingIntent.getBroadcast(mContext, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT);
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         alarmManager.set(AlarmManager.RTC_WAKEUP, minExpirationDate, carrierKeyDownloadIntent);
         Log.d(LOG_TAG, "setRenewelAlarm: action=" + intent.getAction() + " time="
                 + new Date(minExpirationDate));
@@ -449,18 +449,14 @@ public class CarrierKeyDownloadManager extends Handler {
             for (int i = 0; i < keys.length(); i++) {
                 JSONObject key = keys.getJSONObject(i);
                 // Support both "public-key" and "certificate" String property.
-                // "certificate" is a more accurate description, however, the 3GPP draft spec
-                // S3-170116, "Privacy Protection for EAP-AKA" section 4.3 mandates the use of
-                // "public-key".
                 String cert = null;
                 if (key.has(JSON_CERTIFICATE)) {
                     cert = key.getString(JSON_CERTIFICATE);
                 } else {
                     cert = key.getString(JSON_CERTIFICATE_ALTERNATE);
                 }
-                // The 3GPP draft spec 3GPP draft spec S3-170116, "Privacy Protection for EAP-AKA"
-                // section 4.3, does not specify any key-type property. To be compatible with these
-                // networks, the logic defaults to WLAN type if not specified.
+                // The key-type property is optional, therefore, the default value is WLAN type if
+                // not specified.
                 int type = TelephonyManager.KEY_TYPE_WLAN;
                 if (key.has(JSON_TYPE)) {
                     String typeString = key.getString(JSON_TYPE);

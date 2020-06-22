@@ -717,11 +717,26 @@ public class DataConnection extends StateMachine {
         // old modem backward compatibility).
         boolean isModemRoaming = mPhone.getServiceState().getDataRoamingFromRegistration();
 
+        // If the apn is NOT metered, we will allow data roaming regardless of the setting.
+        boolean isUnmeteredApnType = !ApnSettingUtils.isMeteredApnType(
+                cp.mApnContext.getApnTypeBitmask(), mPhone);
+
         // Set this flag to true if the user turns on data roaming. Or if we override the roaming
         // state in framework, we should set this flag to true as well so the modem will not reject
         // the data call setup (because the modem actually thinks the device is roaming).
         boolean allowRoaming = mPhone.getDataRoamingEnabled()
-                || (isModemRoaming && !mPhone.getServiceState().getDataRoaming());
+                || (isModemRoaming && (!mPhone.getServiceState().getDataRoaming()
+                || isUnmeteredApnType));
+
+        if (DBG) {
+            log("allowRoaming=" + allowRoaming
+                    + ", mPhone.getDataRoamingEnabled()=" + mPhone.getDataRoamingEnabled()
+                    + ", isModemRoaming=" + isModemRoaming
+                    + ", mPhone.getServiceState().getDataRoaming()="
+                    + mPhone.getServiceState().getDataRoaming()
+                    + ", isUnmeteredApnType=" + isUnmeteredApnType
+            );
+        }
 
         // Check if this data setup is a handover.
         LinkProperties linkProperties = null;
@@ -1054,8 +1069,7 @@ public class DataConnection extends StateMachine {
     private void updateTcpBufferSizes(int rilRat) {
         String sizes = null;
         ServiceState ss = mPhone.getServiceState();
-        if (rilRat == ServiceState.RIL_RADIO_TECHNOLOGY_LTE &&
-                ss.isUsingCarrierAggregation()) {
+        if (rilRat == ServiceState.RIL_RADIO_TECHNOLOGY_LTE && ss.isUsingCarrierAggregation()) {
             rilRat = ServiceState.RIL_RADIO_TECHNOLOGY_LTE_CA;
         }
         String ratName = ServiceState.rilRadioTechnologyToString(rilRat).toLowerCase(Locale.ROOT);
@@ -1070,8 +1084,8 @@ public class DataConnection extends StateMachine {
         // NR 5G Non-Standalone use LTE cell as the primary cell, the ril technology is LTE in this
         // case. We use NR 5G TCP buffer size when connected to NR 5G Non-Standalone network.
         if (mTransportType == AccessNetworkConstants.TRANSPORT_TYPE_WWAN
-                && (rilRat == ServiceState.RIL_RADIO_TECHNOLOGY_LTE
-                    || rilRat == ServiceState.RIL_RADIO_TECHNOLOGY_LTE_CA) && isNRConnected()
+                && ((rilRat == ServiceState.RIL_RADIO_TECHNOLOGY_LTE
+                || rilRat == ServiceState.RIL_RADIO_TECHNOLOGY_LTE_CA) && isNRConnected())
                 && mPhone.getServiceStateTracker().getNrContextIds().contains(mCid)) {
             ratName = RAT_NAME_5G;
         }
@@ -1131,7 +1145,7 @@ public class DataConnection extends StateMachine {
                     break;
                 case ServiceState.RIL_RADIO_TECHNOLOGY_LTE_CA:
                     // Use NR 5G TCP buffer size when connected to NR 5G Non-Standalone network.
-                    if (isNRConnected()) {
+                    if (RAT_NAME_5G.equals(ratName)) {
                         sizes = TCP_BUFFER_SIZES_NR;
                     } else {
                         sizes = TCP_BUFFER_SIZES_LTE_CA;
@@ -1301,15 +1315,13 @@ public class DataConnection extends StateMachine {
         }
 
         // If data is enabled, this data connection can't be for unmetered used only because
-        // everyone should be able to use it.
+        // everyone should be able to use it if:
+        // 1. Device is not roaming, or
+        // 2. Device is roaming and data roaming is turned on
         if (mPhone.getDataEnabledSettings().isDataEnabled()) {
-            return false;
-        }
-
-        // If the device is roaming and data roaming it turned on, then this data connection can't
-        // be for unmetered use only.
-        if (mDct.getDataRoamingEnabled() && mPhone.getServiceState().getDataRoaming()) {
-            return false;
+            if (!mPhone.getServiceState().getDataRoaming() || mDct.getDataRoamingEnabled()) {
+                return false;
+            }
         }
 
         // The data connection can only be unmetered used only if all attached APN contexts
@@ -1404,15 +1416,11 @@ public class DataConnection extends StateMachine {
                 }
             }
 
-            // Mark NOT_METERED in the following cases,
-            // 1. All APNs in APN settings are unmetered.
-            // 2. The non-restricted data and is intended for unmetered use only.
-            if ((mUnmeteredUseOnly && !mRestrictedNetworkOverride)
-                    || !ApnSettingUtils.isMetered(mApnSetting, mPhone)) {
-                result.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
-            } else {
-                result.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
-            }
+            // DataConnection has the immutable NOT_METERED capability only if all APNs in the
+            // APN setting are unmetered according to carrier config METERED_APN_TYPES_STRINGS.
+            // All other cases should use the dynamic TEMPORARILY_NOT_METERED capability instead.
+            result.setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED,
+                    !ApnSettingUtils.isMetered(mApnSetting, mPhone));
 
             if (result.deduceRestrictedCapability()) {
                 result.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
@@ -1434,19 +1442,19 @@ public class DataConnection extends StateMachine {
         result.setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING,
                 !mPhone.getServiceState().getDataRoaming());
 
-        result.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED);
-
-        // Override values set above when requested by policy
-        if ((mSubscriptionOverride & SUBSCRIPTION_OVERRIDE_UNMETERED) != 0) {
-            result.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
-        }
-        if ((mSubscriptionOverride & SUBSCRIPTION_OVERRIDE_CONGESTED) != 0) {
-            result.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED);
+        if ((mSubscriptionOverride & SUBSCRIPTION_OVERRIDE_CONGESTED) == 0) {
+            result.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED);
         }
 
-        // Override set by DcTracker
-        if (mUnmeteredOverride) {
-            result.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+        // Mark TEMPORARILY_NOT_METERED in the following cases:
+        // 1. The non-restricted data is intended for unmetered use only.
+        // 2. DcTracker set an unmetered override due to network/location (eg. 5G).
+        // 3. SubscriptionManager set an unmetered override as requested by policy.
+        if ((mUnmeteredUseOnly && !mRestrictedNetworkOverride) || mUnmeteredOverride
+                || (mSubscriptionOverride & SUBSCRIPTION_OVERRIDE_UNMETERED) != 0) {
+            result.addCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED);
+        } else {
+            result.removeCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED);
         }
 
         final boolean suspended =
@@ -1572,7 +1580,7 @@ public class DataConnection extends StateMachine {
                 }
 
                 for (InetAddress gateway : response.getGatewayAddresses()) {
-                    int mtu = gateway instanceof java.net.Inet6Address ? response.getMtuV6() 
+                    int mtu = gateway instanceof java.net.Inet6Address ? response.getMtuV6()
                             : response.getMtuV4();
                     // Allow 0.0.0.0 or :: as a gateway;
                     // this indicates a point-to-point interface.
@@ -1882,10 +1890,8 @@ public class DataConnection extends StateMachine {
                             DataConnection.this, mTransportType);
                     NetworkInfo networkInfo = mHandoverSourceNetworkAgent.getNetworkInfo();
                     if (networkInfo != null) {
-                        networkInfo.setDetailedState(NetworkInfo.DetailedState.DISCONNECTED,
-                                "dangling clean up", networkInfo.getExtraInfo());
-                        mHandoverSourceNetworkAgent.sendNetworkInfo(networkInfo,
-                                DataConnection.this);
+                        log("Cleared dangling network agent. " + mHandoverSourceNetworkAgent);
+                        mHandoverSourceNetworkAgent.unregister(DataConnection.this);
                     } else {
                         String str = "Failed to get network info.";
                         loge(str);
@@ -2192,6 +2198,7 @@ public class DataConnection extends StateMachine {
             final NetworkAgentConfig.Builder configBuilder = new NetworkAgentConfig.Builder();
             configBuilder.setLegacyType(ConnectivityManager.TYPE_MOBILE);
             configBuilder.setLegacyTypeName(NETWORK_TYPE);
+            configBuilder.setLegacyExtraInfo(mApnSetting.getApnName());
             final CarrierSignalAgent carrierSignalAgent = mPhone.getCarrierSignalAgent();
             if (carrierSignalAgent.hasRegisteredReceivers(TelephonyManager
                     .ACTION_CARRIER_SIGNAL_REDIRECTED)) {
@@ -3241,7 +3248,7 @@ public class DataConnection extends StateMachine {
 
     protected boolean isPdpRejectConfigEnabled() {
         return mPhone.getContext().getResources().getBoolean(
-                com.android.internal.R.bool.config_pdp_retry_for_29_33_55_enabled);
+                com.android.internal.R.bool.config_pdp_reject_enable_retry);
     }
 
     protected boolean isDataCallConnectAllowed() {

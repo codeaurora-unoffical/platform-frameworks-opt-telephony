@@ -194,6 +194,9 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
     private boolean mIsUssdRequest;
 
     private boolean mIsCallFwdReg;
+
+    private boolean mIsNetworkInitiatedUSSD;
+
     private State mState = State.PENDING;
     private CharSequence mMessage;
     private boolean mIsSsInfo = false;
@@ -337,6 +340,7 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
 
         ret.mMessage = ussdMessage;
         ret.mIsUssdRequest = isUssdRequest;
+        ret.mIsNetworkInitiatedUSSD = true;
 
         // If it's a request, set to PENDING so that it's cancelable.
         if (isUssdRequest) {
@@ -1205,7 +1209,7 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
                     mState = State.FAILED;
                     mMessage = getErrorMessage(ar);
 
-                    mPhone.onMMIDone(this);
+                    mPhone.onUssdComplete(this, (CommandException) ar.exception);
                 }
 
                 // Note that unlike most everything else, the USSD complete
@@ -2001,5 +2005,10 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
         if (mCallbackReceiver != null) sb.append(" hasReceiver");
         sb.append("}");
         return sb.toString();
+    }
+
+    @Override
+    public boolean isNetworkInitiatedUssd() {
+        return mIsNetworkInitiatedUSSD;
     }
 }

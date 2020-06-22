@@ -164,8 +164,10 @@ public class DcTrackerTest extends TelephonyTest {
 
     private Message mMessage;
 
+    private CellularDataService mCellularDataService;
+
     private void addDataService() {
-        CellularDataService cellularDataService = new CellularDataService();
+        mCellularDataService = new CellularDataService();
         ServiceInfo serviceInfo = new ServiceInfo();
         serviceInfo.packageName = "com.android.phone";
         serviceInfo.permission = "android.permission.BIND_TELEPHONY_DATA_SERVICE";
@@ -174,7 +176,7 @@ public class DcTrackerTest extends TelephonyTest {
                 DataService.SERVICE_INTERFACE,
                 null,
                 "com.android.phone",
-                cellularDataService.mBinder,
+                mCellularDataService.mBinder,
                 serviceInfo,
                 filter);
     }
@@ -541,9 +543,11 @@ public class DcTrackerTest extends TelephonyTest {
     public void tearDown() throws Exception {
         logd("DcTrackerTest -tearDown");
         mDct.removeCallbacksAndMessages(null);
+        mDct.stopHandlerThread();
         mDct = null;
         mDcTrackerTestHandler.quit();
         mDcTrackerTestHandler.join();
+        mCellularDataService.onDestroy();
         waitForMs(100);
         super.tearDown();
     }
@@ -650,6 +654,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.enableApn(ApnSetting.TYPE_XCAP, DcTracker.REQUEST_TYPE_NORMAL, null);
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
+        waitForMs(200);
         verify(mSimulatedCommandsVerifier, times(1)).setupDataCall(
                 eq(AccessNetworkType.EUTRAN), any(DataProfile.class),
                 eq(false), eq(false), eq(DataService.REQUEST_REASON_NORMAL), any(),
@@ -739,8 +745,8 @@ public class DcTrackerTest extends TelephonyTest {
                         mApnContext));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         dpCaptor = ArgumentCaptor.forClass(DataProfile.class);
         // Verify if RIL command was sent properly.
         verify(mSimulatedCommandsVerifier, times(2)).setupDataCall(
@@ -782,8 +788,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_DATA_ENABLED_CHANGED, ar));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         // expected tear down all metered DataConnections
         verify(mSimulatedCommandsVerifier, times(1)).deactivateDataCall(
                 eq(DataService.REQUEST_REASON_NORMAL), anyInt(),
@@ -834,8 +840,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.obtainMessage(DctConstants.EVENT_DATA_ENABLED_OVERRIDE_RULES_CHANGED).sendToTarget();
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         // expected tear down all metered DataConnections
         verify(mSimulatedCommandsVerifier, times(2)).deactivateDataCall(
                 eq(DataService.REQUEST_REASON_NORMAL), anyInt(),
@@ -848,8 +854,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.obtainMessage(DctConstants.EVENT_DATA_ENABLED_OVERRIDE_RULES_CHANGED).sendToTarget();
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         verify(mSimulatedCommandsVerifier, times(1)).setupDataCall(
                 eq(AccessNetworkType.EUTRAN), dpCaptor.capture(),
                 eq(false), eq(false), eq(DataService.REQUEST_REASON_NORMAL), any(),
@@ -893,8 +899,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_ROAMING_ON));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         // expected tear down all metered DataConnections
         verify(mSimulatedCommandsVerifier, times(1)).deactivateDataCall(
                 eq(DataService.REQUEST_REASON_NORMAL), anyInt(),
@@ -992,8 +998,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_DATA_ENABLED_CHANGED, ar));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         // Validate all metered data connections have been torn down
         verify(mSimulatedCommandsVerifier, times(1)).deactivateDataCall(
                 eq(DataService.REQUEST_REASON_NORMAL), anyInt(),
@@ -1059,8 +1065,6 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.enableApn(ApnSetting.TYPE_SUPL, DcTracker.REQUEST_TYPE_NORMAL, null);
 
         sendInitializationEvents();
-
-        waitForMs(200);
 
         // Assert that both APN_TYPE_SUPL & APN_TYPE_DEFAULT are connected even we only setup data
         // for APN_TYPE_SUPL
@@ -1152,6 +1156,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.requestNetwork(nr, DcTracker.REQUEST_TYPE_NORMAL, null);
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
+        waitForMs(200);
         verify(mSimulatedCommandsVerifier, times(1)).setupDataCall(anyInt(), any(DataProfile.class),
                 eq(false), eq(false), eq(DataService.REQUEST_REASON_NORMAL), any(),
                 any(Message.class));
@@ -1178,6 +1184,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.requestNetwork(nr, DcTracker.REQUEST_TYPE_NORMAL, null);
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
+        waitForMs(200);
         verify(mSimulatedCommandsVerifier, times(1)).setupDataCall(anyInt(), any(DataProfile.class),
                 eq(false), eq(false), eq(DataService.REQUEST_REASON_NORMAL), any(),
                 any(Message.class));
@@ -1279,8 +1287,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_DATA_RAT_CHANGED, null));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         // Verify the disconnected data call due to rat change and retry manger schedule another
         // data call setup
         verify(mSimulatedCommandsVerifier, times(1)).deactivateDataCall(
@@ -1296,8 +1304,8 @@ public class DcTrackerTest extends TelephonyTest {
                         mApnContext));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         // Verify if RIL command was sent properly.
         verify(mSimulatedCommandsVerifier).setupDataCall(
                 eq(AccessNetworkType.EUTRAN), dpCaptor.capture(),
@@ -1401,8 +1409,8 @@ public class DcTrackerTest extends TelephonyTest {
         mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_DATA_RAT_CHANGED, null));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
         waitForMs(200);
-
         // Verify data connection is on
         verify(mSimulatedCommandsVerifier, times(0)).deactivateDataCall(
                 eq(DataService.REQUEST_REASON_NORMAL), anyInt(),
@@ -1565,6 +1573,8 @@ public class DcTrackerTest extends TelephonyTest {
                 NetworkAgent.INVALID_NETWORK, 1, null));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
+        // Data connection is running on a different thread. Have to wait.
+        waitForMs(200);
         verify(mSimulatedCommandsVerifier, times(1)).getDataCallList(any(Message.class));
     }
 
@@ -1733,12 +1743,6 @@ public class DcTrackerTest extends TelephonyTest {
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
     }
 
-    private boolean getHysteresisStatus() throws Exception {
-        Field field = DcTracker.class.getDeclaredField(("mHysteresis"));
-        field.setAccessible(true);
-        return (boolean) field.get(mDct);
-    }
-
     private boolean getWatchdogStatus() throws Exception {
         Field field = DcTracker.class.getDeclaredField(("mWatchdog"));
         field.setAccessible(true);
@@ -1785,11 +1789,13 @@ public class DcTrackerTest extends TelephonyTest {
         int id = setUpDataConnection();
         setUpSubscriptionPlans(false);
         setUpWatchdogTimer();
-        doReturn(NetworkRegistrationInfo.NR_STATE_CONNECTED).when(mServiceState).getNrState();
+        doReturn(new TelephonyDisplayInfo(TelephonyManager.NETWORK_TYPE_LTE,
+                TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA))
+                .when(mDisplayInfoController).getTelephonyDisplayInfo();
         doReturn(1).when(mPhone).getSubId();
 
         // NetCapability should be metered when connected to 5G with no unmetered plan or frequency
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_TELEPHONY_DISPLAY_INFO_CHANGED));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
         verify(mDataConnection, times(1)).onMeterednessChanged(false);
 
@@ -1802,14 +1808,18 @@ public class DcTrackerTest extends TelephonyTest {
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
         // NetCapability should switch to unmetered when fr=MMWAVE and MMWAVE unmetered
-        doReturn(ServiceState.FREQUENCY_RANGE_MMWAVE).when(mServiceState).getNrFrequencyRange();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
+        doReturn(new TelephonyDisplayInfo(TelephonyManager.NETWORK_TYPE_LTE,
+                TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE))
+                .when(mDisplayInfoController).getTelephonyDisplayInfo();
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_TELEPHONY_DISPLAY_INFO_CHANGED));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
         verify(mDataConnection, times(1)).onMeterednessChanged(true);
 
         // NetCapability should switch to metered when fr=SUB6 and MMWAVE unmetered
-        doReturn(ServiceState.FREQUENCY_RANGE_HIGH).when(mServiceState).getNrFrequencyRange();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
+        doReturn(new TelephonyDisplayInfo(TelephonyManager.NETWORK_TYPE_LTE,
+                TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA))
+                .when(mDisplayInfoController).getTelephonyDisplayInfo();
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_TELEPHONY_DISPLAY_INFO_CHANGED));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
         verify(mDataConnection, times(2)).onMeterednessChanged(false);
 
@@ -1823,8 +1833,10 @@ public class DcTrackerTest extends TelephonyTest {
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
 
         // NetCapability should switch to unmetered when fr=SUB6 and SUB6 unmetered
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_TELEPHONY_DISPLAY_INFO_CHANGED));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
+        // Data connection is running on a different thread. Have to wait.
+        waitForMs(200);
         verify(mDataConnection, times(2)).onMeterednessChanged(true);
 
         resetDataConnection(id);
@@ -1838,80 +1850,22 @@ public class DcTrackerTest extends TelephonyTest {
         setUpWatchdogTimer();
 
         // NetCapability should be unmetered when connected to 5G
-        doReturn(NetworkRegistrationInfo.NR_STATE_CONNECTED).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
+        doReturn(new TelephonyDisplayInfo(TelephonyManager.NETWORK_TYPE_LTE,
+                TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA))
+                .when(mDisplayInfoController).getTelephonyDisplayInfo();
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_TELEPHONY_DISPLAY_INFO_CHANGED));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
         verify(mDataConnection, times(1)).onMeterednessChanged(true);
 
         // NetCapability should be metered when disconnected from 5G
-        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
+        doReturn(new TelephonyDisplayInfo(TelephonyManager.NETWORK_TYPE_LTE,
+                TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE))
+                .when(mDisplayInfoController).getTelephonyDisplayInfo();
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_TELEPHONY_DISPLAY_INFO_CHANGED));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
+        // Data connection is running on a different thread. Have to wait.
+        waitForMs(200);
         verify(mDataConnection, times(1)).onMeterednessChanged(false);
-
-        resetDataConnection(id);
-    }
-
-    @Test
-    public void testReevaluateUnmeteredConnectionsOnHysteresis() throws Exception {
-        initApns(PhoneConstants.APN_TYPE_DEFAULT, new String[]{PhoneConstants.APN_TYPE_ALL});
-        int id = setUpDataConnection();
-        setUpSubscriptionPlans(true);
-        setUpWatchdogTimer();
-
-        // Hysteresis active for 10s
-        doReturn(1).when(mPhone).getSubId();
-        mBundle.putInt(CarrierConfigManager.KEY_5G_ICON_DISPLAY_GRACE_PERIOD_SEC_INT, 10000);
-        Intent intent = new Intent(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
-        intent.putExtra(CarrierConfigManager.EXTRA_SLOT_INDEX, mPhone.getPhoneId());
-        intent.putExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, mPhone.getSubId());
-        mContext.sendBroadcast(intent);
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        // Hysteresis inactive when unmetered and never connected to 5G
-        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_5G_TIMER_HYSTERESIS));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        assertFalse(getHysteresisStatus());
-
-        // Hysteresis inactive when unmetered and connected to 5G
-        doReturn(NetworkRegistrationInfo.NR_STATE_CONNECTED).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        assertFalse(getHysteresisStatus());
-
-        // Hysteresis active when unmetered and disconnected after connected to 5G
-        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        assertTrue(getHysteresisStatus());
-
-        // NetCapability metered when hysteresis timer goes off
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_5G_TIMER_HYSTERESIS));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        assertFalse(getHysteresisStatus());
-        verify(mDataConnection, times(1)).onMeterednessChanged(true);
-
-        // Hysteresis inactive when reconnected after timer goes off
-        doReturn(NetworkRegistrationInfo.NR_STATE_CONNECTED).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        assertFalse(getHysteresisStatus());
-
-        // Hysteresis disabled
-        doReturn(2).when(mPhone).getSubId();
-        mBundle.putInt(CarrierConfigManager.KEY_5G_ICON_DISPLAY_GRACE_PERIOD_SEC_INT, 0);
-        intent = new Intent(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
-        intent.putExtra(CarrierConfigManager.EXTRA_SLOT_INDEX, mPhone.getPhoneId());
-        intent.putExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, mPhone.getSubId());
-        mContext.sendBroadcast(intent);
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        // Hysteresis inactive when CarrierConfig is set to 0
-        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        assertFalse(getHysteresisStatus());
 
         resetDataConnection(id);
     }
@@ -1923,149 +1877,29 @@ public class DcTrackerTest extends TelephonyTest {
         setUpSubscriptionPlans(true);
         setUpWatchdogTimer();
 
-        // Watchdog inactive when unmetered and never connected to 5G
-        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_5G_TIMER_WATCHDOG));
+        // Watchdog inactive when unmetered and not connected to 5G
+        doReturn(new TelephonyDisplayInfo(TelephonyManager.NETWORK_TYPE_LTE,
+                TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE))
+                .when(mDisplayInfoController).getTelephonyDisplayInfo();
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_NR_TIMER_WATCHDOG));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
         assertFalse(getWatchdogStatus());
 
-        // Hysteresis active for 10s
-        doReturn(1).when(mPhone).getSubId();
-        mBundle.putInt(CarrierConfigManager.KEY_5G_ICON_DISPLAY_GRACE_PERIOD_SEC_INT, 10000);
-        Intent intent = new Intent(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
-        intent.putExtra(CarrierConfigManager.EXTRA_SLOT_INDEX, mPhone.getPhoneId());
-        intent.putExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, mPhone.getSubId());
-        mContext.sendBroadcast(intent);
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
         // Watchdog active when unmetered and connected to 5G
-        doReturn(NetworkRegistrationInfo.NR_STATE_CONNECTED).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
+        doReturn(new TelephonyDisplayInfo(TelephonyManager.NETWORK_TYPE_LTE,
+                TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA))
+                .when(mDisplayInfoController).getTelephonyDisplayInfo();
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_TELEPHONY_DISPLAY_INFO_CHANGED));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        assertTrue(getWatchdogStatus());
-        assertFalse(getHysteresisStatus());
-
-        // Watchdog active during hysteresis
-        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        assertTrue(getHysteresisStatus());
         assertTrue(getWatchdogStatus());
 
         // Watchdog inactive when metered
         setUpSubscriptionPlans(false);
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
+        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_TELEPHONY_DISPLAY_INFO_CHANGED));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
         assertFalse(getWatchdogStatus());
 
         resetDataConnection(id);
-    }
-
-    @Test
-    public void testGetNrDisplayType() {
-        ArgumentCaptor<TelephonyDisplayInfo> captor =
-                ArgumentCaptor.forClass(TelephonyDisplayInfo.class);
-        doReturn(TelephonyManager.NETWORK_TYPE_LTE).when(mServiceState).getDataNetworkType();
-
-        // set up 5G icon configuration
-        mBundle.putString(CarrierConfigManager.KEY_5G_ICON_CONFIGURATION_STRING,
-                "connected_mmwave:5G_Plus,connected:5G,not_restricted_rrc_idle:5G,"
-                        + "not_restricted_rrc_con:5G");
-        doReturn(1).when(mPhone).getSubId();
-        Intent intent = new Intent(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
-        intent.putExtra(CarrierConfigManager.EXTRA_SLOT_INDEX, mPhone.getPhoneId());
-        intent.putExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, mPhone.getSubId());
-        mContext.sendBroadcast(intent);
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        // not NR
-        doReturn(NetworkRegistrationInfo.NR_STATE_NONE).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        verify(mPhone, times(1)).notifyDisplayInfoChanged(captor.capture());
-        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE,
-                captor.getValue().getOverrideNetworkType());
-
-        // NR NSA, restricted
-        doReturn(NetworkRegistrationInfo.NR_STATE_RESTRICTED).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        verify(mPhone, times(2)).notifyDisplayInfoChanged(captor.capture());
-        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE,
-                captor.getValue().getOverrideNetworkType());
-
-        // NR NSA, not restricted
-        doReturn(NetworkRegistrationInfo.NR_STATE_NOT_RESTRICTED).when(mServiceState).getNrState();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        verify(mPhone, times(3)).notifyDisplayInfoChanged(captor.capture());
-        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA,
-                captor.getValue().getOverrideNetworkType());
-
-        doReturn(NetworkRegistrationInfo.NR_STATE_CONNECTED).when(mServiceState).getNrState();
-
-        // NR NSA, sub 6 frequency
-        doReturn(ServiceState.FREQUENCY_RANGE_UNKNOWN).when(mServiceState).getNrFrequencyRange();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        verify(mPhone, times(4)).notifyDisplayInfoChanged(captor.capture());
-        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA,
-                captor.getValue().getOverrideNetworkType());
-
-        // NR NSA, millimeter wave frequency
-        doReturn(ServiceState.FREQUENCY_RANGE_MMWAVE).when(mServiceState).getNrFrequencyRange();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        verify(mPhone, times(5)).notifyDisplayInfoChanged(captor.capture());
-        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA_MMWAVE,
-                captor.getValue().getOverrideNetworkType());
-    }
-
-    @Test
-    public void testGetLteDisplayType() {
-        ArgumentCaptor<TelephonyDisplayInfo> captor =
-                ArgumentCaptor.forClass(TelephonyDisplayInfo.class);
-
-        // normal LTE
-        doReturn(TelephonyManager.NETWORK_TYPE_LTE).when(mServiceState).getDataNetworkType();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        verify(mPhone, times(1)).notifyDisplayInfoChanged(captor.capture());
-        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE,
-                captor.getValue().getOverrideNetworkType());
-
-        // LTE CA
-        doReturn(TelephonyManager.NETWORK_TYPE_LTE_CA).when(mServiceState).getDataNetworkType();
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        verify(mPhone, times(2)).notifyDisplayInfoChanged(captor.capture());
-        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_LTE_CA,
-                captor.getValue().getOverrideNetworkType());
-
-        // TODO: LTE ADVANCED PRO
-    }
-
-    @Test
-    public void testUpdateDisplayInfo() {
-        ArgumentCaptor<TelephonyDisplayInfo> captor =
-                ArgumentCaptor.forClass(TelephonyDisplayInfo.class);
-        doReturn(TelephonyManager.NETWORK_TYPE_HSPAP).when(mServiceState).getDataNetworkType();
-
-        mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_SERVICE_STATE_CHANGED));
-        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-
-        verify(mPhone, times(1)).notifyDisplayInfoChanged(captor.capture());
-        TelephonyDisplayInfo telephonyDisplayInfo = captor.getValue();
-        assertEquals(TelephonyManager.NETWORK_TYPE_HSPAP, telephonyDisplayInfo.getNetworkType());
-        assertEquals(TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE,
-                telephonyDisplayInfo.getOverrideNetworkType());
     }
 
     /**
@@ -2155,11 +1989,50 @@ public class DcTrackerTest extends TelephonyTest {
                 anyInt(), anyInt());
         mDct.sendMessage(mDct.obtainMessage(DctConstants.EVENT_DATA_RAT_CHANGED, null));
         waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
-        waitForMs(200);
 
+        // Data connection is running on a different thread. Have to wait.
+        waitForMs(200);
         // expected tear down all metered DataConnections
         verify(mSimulatedCommandsVerifier).deactivateDataCall(
                 eq(DataService.REQUEST_REASON_NORMAL), anyInt(),
                 any(Message.class));
+    }
+
+    @Test
+    public void testApnConfigRepositoryUpdatedOnCarrierConfigChange() throws Exception {
+        assertPriority(ApnSetting.TYPE_CBS_STRING, 2);
+        assertPriority(ApnSetting.TYPE_MMS_STRING, 2);
+
+        mBundle.putStringArray(CarrierConfigManager.KEY_APN_PRIORITY_STRING_ARRAY,
+                new String[] {
+                        ApnSetting.TYPE_CBS_STRING + ":11",
+                        ApnSetting.TYPE_MMS_STRING + ":19",
+                });
+
+        sendInitializationEvents();
+
+        Intent intent = new Intent(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
+        intent.putExtra(CarrierConfigManager.EXTRA_SLOT_INDEX, mPhone.getPhoneId());
+        intent.putExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, mPhone.getSubId());
+        mContext.sendBroadcast(intent);
+        waitForLastHandlerAction(mDcTrackerTestHandler.getThreadHandler());
+
+        assertPriority(ApnSetting.TYPE_CBS_STRING, 11);
+        assertPriority(ApnSetting.TYPE_MMS_STRING, 19);
+
+        //Ensure apns are in sorted order.
+        ApnContext lastApnContext = null;
+        for (ApnContext apnContext : mDct.getApnContexts()) {
+            if (lastApnContext != null) {
+                assertTrue(apnContext.getPriority() <= lastApnContext.getPriority());
+            }
+            lastApnContext = apnContext;
+        }
+    }
+
+    private void assertPriority(String type, int priority) {
+        assertEquals(priority, mDct.getApnContexts().stream()
+                .filter(x -> x.getApnType().equals(type))
+                .findFirst().get().getPriority());
     }
 }

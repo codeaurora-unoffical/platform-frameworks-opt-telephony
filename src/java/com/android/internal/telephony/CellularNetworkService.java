@@ -214,14 +214,14 @@ public class CellularNetworkService extends NetworkService {
         }
 
         private NetworkRegistrationInfo createRegistrationStateFromVoiceRegState(Object result) {
-            int transportType = AccessNetworkConstants.TRANSPORT_TYPE_WWAN;
-            int domain = NetworkRegistrationInfo.DOMAIN_CS;
+            final int transportType = AccessNetworkConstants.TRANSPORT_TYPE_WWAN;
+            final int domain = NetworkRegistrationInfo.DOMAIN_CS;
 
             // 1.5 at the top so that we can do an "early exit" from the method
             if (result instanceof android.hardware.radio.V1_5.RegStateResult) {
                 return getNetworkRegistrationInfo(
-                        NetworkRegistrationInfo.DOMAIN_PS,
-                        AccessNetworkConstants.TRANSPORT_TYPE_WWAN,
+                        domain,
+                        transportType,
                         (android.hardware.radio.V1_5.RegStateResult) result);
             } else if (result instanceof android.hardware.radio.V1_0.VoiceRegStateResult) {
                 android.hardware.radio.V1_0.VoiceRegStateResult voiceRegState =
@@ -275,9 +275,10 @@ public class CellularNetworkService extends NetworkService {
         }
 
         private NetworkRegistrationInfo createRegistrationStateFromDataRegState(Object result) {
-            int domain = NetworkRegistrationInfo.DOMAIN_PS;
+            final int domain = NetworkRegistrationInfo.DOMAIN_PS;
+            final int transportType = AccessNetworkConstants.TRANSPORT_TYPE_WWAN;
+
             int regState = NetworkRegistrationInfo.REGISTRATION_STATE_UNKNOWN;
-            int transportType = AccessNetworkConstants.TRANSPORT_TYPE_WWAN;
             int networkType = TelephonyManager.NETWORK_TYPE_UNKNOWN;
             int reasonForDenial = 0;
             boolean isUsingCarrierAggregation = false;
@@ -295,8 +296,8 @@ public class CellularNetworkService extends NetworkService {
             // 1.5 at the top so that we can do an "early exit" from the method
             if (result instanceof android.hardware.radio.V1_5.RegStateResult) {
                 return getNetworkRegistrationInfo(
-                        NetworkRegistrationInfo.DOMAIN_PS,
-                        AccessNetworkConstants.TRANSPORT_TYPE_WWAN,
+                        domain,
+                        transportType,
                         (android.hardware.radio.V1_5.RegStateResult) result);
             } else if (result instanceof android.hardware.radio.V1_0.DataRegStateResult) {
                 android.hardware.radio.V1_0.DataRegStateResult dataRegState =
@@ -354,14 +355,8 @@ public class CellularNetworkService extends NetworkService {
             List<Integer> availableServices = getAvailableServices(
                     regState, domain, emergencyOnly);
 
-            // In earlier versions of the HAL, LTE_CA was allowed to indicate that the device
-            // is on CA; however, that has been superseded by the PHYSICAL_CHANNEL_CONFIG signal.
-            // Because some vendors provide both NETWORK_TYPE_LTE_CA *and* PHYSICAL_CHANNEL_CONFIG,
-            // this tweak is left for compatibility; however, the network type is no longer allowed
-            // to be used to declare that carrier aggregation is in effect, because the other
-            // signal provides a much richer information set, and we want to mitigate confusion in
-            // how CA information is being provided.
             if (networkType == TelephonyManager.NETWORK_TYPE_LTE_CA) {
+                isUsingCarrierAggregation = true;
                 networkType = TelephonyManager.NETWORK_TYPE_LTE;
             }
 
@@ -387,9 +382,14 @@ public class CellularNetworkService extends NetworkService {
 
             // Network Type fixup for carrier aggregation
             int networkType = ServiceState.rilRadioTechnologyToNetworkType(regResult.rat);
-            boolean isUsingCarrierAggregation = false;
+            // In earlier versions of the HAL, LTE_CA was allowed to indicate that the device
+            // is on CA; however, that has been superseded by the PHYSICAL_CHANNEL_CONFIG signal.
+            // Because some vendors provide both NETWORK_TYPE_LTE_CA *and* PHYSICAL_CHANNEL_CONFIG,
+            // this tweak is left for compatibility; however, the network type is no longer allowed
+            // to be used to declare that carrier aggregation is in effect, because the other
+            // signal provides a much richer information set, and we want to mitigate confusion in
+            // how CA information is being provided.
             if (networkType == TelephonyManager.NETWORK_TYPE_LTE_CA) {
-                isUsingCarrierAggregation = true;
                 networkType = TelephonyManager.NETWORK_TYPE_LTE;
             }
 
@@ -422,9 +422,9 @@ public class CellularNetworkService extends NetworkService {
                             .AccessTechnologySpecificInfo.EutranRegistrationInfo eutranInfo =
                                     regResult.accessTechnologySpecificInfo.eutranInfo();
 
-                    isEndcAvailable = eutranInfo.nrIndicators.isDcNrRestricted;
+                    isDcNrRestricted = eutranInfo.nrIndicators.isDcNrRestricted;
                     isNrAvailable = eutranInfo.nrIndicators.isNrAvailable;
-                    isDcNrRestricted = eutranInfo.nrIndicators.isEndcAvailable;
+                    isEndcAvailable = eutranInfo.nrIndicators.isEndcAvailable;
                     vopsInfo = convertHalLteVopsSupportInfo(
                             eutranInfo.lteVopsInfo.isVopsSupported,
                             eutranInfo.lteVopsInfo.isEmcBearerSupported);
@@ -448,7 +448,7 @@ public class CellularNetworkService extends NetworkService {
                     return new NetworkRegistrationInfo(domain, transportType, regState, networkType,
                             reasonForDenial, isEmergencyOnly, availableServices, cellIdentity,
                             rplmn, MAX_DATA_CALLS, isDcNrRestricted, isNrAvailable, isEndcAvailable,
-                            vopsInfo, isUsingCarrierAggregation);
+                            vopsInfo, false /* isUsingCarrierAggregation */);
             }
         }
 

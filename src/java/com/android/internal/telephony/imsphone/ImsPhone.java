@@ -43,6 +43,7 @@ import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_NON
 import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_PACKET;
 import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_VOICE;
 
+import android.annotation.NonNull;
 import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationManager;
@@ -111,6 +112,7 @@ import com.android.internal.telephony.emergency.EmergencyNumberTracker;
 import com.android.internal.telephony.gsm.GsmMmiCode;
 import com.android.internal.telephony.gsm.SuppServiceNotification;
 import com.android.internal.telephony.metrics.TelephonyMetrics;
+import com.android.internal.telephony.metrics.VoiceCallSessionStats;
 import com.android.internal.telephony.nano.TelephonyProto.ImsConnectionState;
 import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.util.NotificationChannelController;
@@ -1353,7 +1355,7 @@ public class ImsPhone extends ImsPhoneBase {
             } else {
                 found.onUssdFinished(ussdMessage, isUssdRequest);
             }
-        } else if (!isUssdError && ussdMessage != null) {
+        } else if (!isUssdError && !TextUtils.isEmpty(ussdMessage)) {
                 // pending USSD not found
                 // The network may initiate its own USSD request
 
@@ -1365,6 +1367,23 @@ public class ImsPhone extends ImsPhoneBase {
                         this);
                 onNetworkInitiatedUssd(mmi);
         }
+    }
+
+    void onUssdComplete(ImsPhoneMmiCode mmi, @NonNull CommandException ex) {
+        //Check if USSD CS fallback scenario and has valid pending MMI session.
+        if (ex.getCommandError() == CommandException.Error.NO_NETWORK_FOUND &&
+                mPendingMMIs.contains(mmi)) {
+            logi("onUssdComplete: migrating USSD from IMS to CS");
+            try {
+                mDefaultPhone.migrateUssdFrom(this, mmi.getDialString(),
+                                              mmi.getUssdCallbackReceiver());
+                mPendingMMIs.remove(mmi);
+                return;
+            } catch (UnsupportedOperationException e) {
+                //no-op
+            }
+        }
+        onMMIDone(mmi);
     }
 
     /**
@@ -1399,11 +1418,11 @@ public class ImsPhone extends ImsPhoneBase {
     public ArrayList<Connection> getHandoverConnection() {
         ArrayList<Connection> connList = new ArrayList<Connection>();
         // Add all foreground call connections
-        connList.addAll(getForegroundCall().mConnections);
+        connList.addAll(getForegroundCall().getConnections());
         // Add all background call connections
-        connList.addAll(getBackgroundCall().mConnections);
+        connList.addAll(getBackgroundCall().getConnections());
         // Add all background call connections
-        connList.addAll(getRingingCall().mConnections);
+        connList.addAll(getRingingCall().getConnections());
         if (connList.size() > 0) {
             return connList;
         } else {
@@ -1473,6 +1492,11 @@ public class ImsPhone extends ImsPhoneBase {
             cfInfo.serviceClass = SERVICE_CLASS_VOICE;
         }
         return cfInfo;
+    }
+
+    @Override
+    public String getLine1Number() {
+        return mDefaultPhone.getLine1Number();
     }
 
     /**
@@ -1783,6 +1807,9 @@ public class ImsPhone extends ImsPhoneBase {
                         intent.getCharSequenceExtra(EXTRA_KEY_NOTIFICATION_MESSAGE);
 
                 Intent resultIntent = new Intent(Intent.ACTION_MAIN);
+                // Note: If the classname below is ever removed, the call to
+                // PendingIntent.getActivity should also specify FLAG_IMMUTABLE to ensure the
+                // pending intent cannot be tampered with.
                 resultIntent.setClassName("com.android.settings",
                         "com.android.settings.Settings$WifiCallingSettingsActivity");
                 resultIntent.putExtra(EXTRA_KEY_ALERT_SHOW, true);
@@ -1793,6 +1820,8 @@ public class ImsPhone extends ImsPhoneBase {
                                 mContext,
                                 0,
                                 resultIntent,
+                                // Note: Since resultIntent above specifies an explicit class name
+                                // we do not need to specify PendingIntent.FLAG_IMMUTABLE here.
                                 PendingIntent.FLAG_UPDATE_CURRENT
                         );
 
@@ -2135,7 +2164,11 @@ public class ImsPhone extends ImsPhoneBase {
         Rlog.d(LOG_TAG, "RTT: checkIfModifyRequestOrResponse data =  " + data);
         switch (data) {
             case QtiImsUtils.RTT_UPGRADE_INITIATE:
-                if (!QtiImsUtils.isRttUpgradeSupported(mPhoneId, mContext)) {
+                ImsCall currentCall = getForegroundCall().getImsCall();
+                boolean rttUpgradeSupported = QtiImsUtils.isRttUpgradeSupported(mPhoneId, mContext);
+                boolean rttVtSupported = QtiImsUtils.isRttSupportedOnVtCalls(mPhoneId, mContext);
+                boolean isVideoCall = (currentCall != null) ? currentCall.isVideoCall() : false;
+                if (!rttUpgradeSupported || (isVideoCall && !rttVtSupported)) {
                     Rlog.d(LOG_TAG, "RTT: upgrade not supported");
                     return;
                 }
@@ -2296,6 +2329,11 @@ public class ImsPhone extends ImsPhoneBase {
             return imsDialArgsBuilder.build();
         }
         return new DialArgs.Builder<>().build();
+    }
+
+    @Override
+    public VoiceCallSessionStats getVoiceCallSessionStats() {
+        return mDefaultPhone.getVoiceCallSessionStats();
     }
 
     public boolean hasAliveCall() {

@@ -16,6 +16,7 @@
 
 package com.android.internal.telephony.dataconnection;
 
+import android.annotation.Nullable;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.os.Message;
@@ -57,7 +58,7 @@ public class ApnContext {
 
     private DctConstants.State mState;
 
-    private final int mPriority;
+    private int mPriority;
 
     private ApnSetting mApnSetting;
 
@@ -161,6 +162,14 @@ public class ApnContext {
     }
 
     /**
+     * Updates the priority of this context.
+     * @param priority The priority of the APN type
+     */
+    public void setPriority(int priority) {
+        mPriority = priority;
+    }
+
+    /**
      * Keeping for backwards compatibility and in case it's needed in the future
      * @return true
      */
@@ -217,10 +226,10 @@ public class ApnContext {
 
     /**
      * Get the next available APN to try.
-     * @return APN setting which will be used for data call setup. Return null if there is no
+     * @return APN setting which will be used for data call setup.{@code null} if there is no
      * APN can be retried.
      */
-    public ApnSetting getNextApnSetting() {
+    public @Nullable ApnSetting getNextApnSetting() {
         return mRetryManager.getNextApnSetting();
     }
 
@@ -615,9 +624,10 @@ public class ApnContext {
     @Override
     public synchronized String toString() {
         // We don't print mDataConnection because its recursive.
-        return "{mApnType=" + mApnType + " mState=" + getState() + " mWaitingApns={" +
-                mRetryManager.getWaitingApns() + "}" + " mApnSetting={" + mApnSetting +
-                "} mReason=" + mReason + " mDataEnabled=" + mDataEnabled + "}";
+        return "{mApnType=" + mApnType + " mState=" + getState() + " mWaitingApns={"
+                    + mRetryManager.getWaitingApns() + " priority=" + mPriority + "}"
+                    + " mApnSetting={" + mApnSetting
+                    + "} mReason=" + mReason + " mDataEnabled=" + mDataEnabled + "}";
     }
 
     private void log(String s) {

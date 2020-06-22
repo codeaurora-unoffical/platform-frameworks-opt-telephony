@@ -606,6 +606,15 @@ public class ImsResolver implements ImsServiceController.ImsServiceControllerCal
         bindCarrierServicesIfAvailable();
     }
 
+    /**
+     * Destroys this ImsResolver. Used for tearing down static resources during testing.
+     */
+    @VisibleForTesting
+    public void destroy() {
+        PhoneConfigurationManager.unregisterForMultiSimConfigChange(mHandler);
+        mHandler.removeCallbacksAndMessages(null);
+    }
+
     // Only start the bind if there is an existing Carrier Configuration. Otherwise, wait for
     // carrier config changed.
     private void bindCarrierServicesIfAvailable() {
@@ -756,6 +765,22 @@ public class ImsResolver implements ImsServiceController.ImsServiceControllerCal
             return controller;
         }
         return null;
+    }
+
+    /**
+     * Unregister a previously registered IImsServiceFeatureCallback through
+     * {@link #getImsServiceControllerAndListen(int, int, IImsServiceFeatureCallback)} .
+     * @param slotId The slot id associated with the ImsFeature.
+     * @param feature The {@link ImsFeature.FeatureType}
+     * @param callback The callback to be unregistered.
+     */
+    public void unregisterImsFeatureCallback(int slotId, int feature,
+            IImsServiceFeatureCallback callback) {
+        ImsServiceController controller = getImsServiceController(slotId, feature);
+
+        if (controller != null) {
+            controller.removeImsServiceFeatureCallback(callback);
+        }
     }
 
     // Used for testing only.

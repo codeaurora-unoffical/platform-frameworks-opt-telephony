@@ -15,7 +15,7 @@
  */
 package com.android.internal.telephony;
 
-import static android.telephony.SubscriptionManager.UNIQUE_KEY_SUBSCRIPTION_ID;
+import static android.telephony.SubscriptionManager.UICC_APPLICATIONS_ENABLED;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -185,7 +185,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
         doReturn(new int[]{FAKE_SUB_ID_1}).when(mSubscriptionController)
                 .getActiveSubIdList(/*visibleOnly*/false);
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_ABSENT, null, FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_ABSENT, null, FAKE_SUB_ID_1);
 
         processAllMessages();
         assertTrue(mUpdater.isSubInfoInitialized());
@@ -196,12 +196,6 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
         verify(mConfigManager).updateConfigForPhoneId(eq(FAKE_SUB_ID_1),
                 eq(IccCardConstants.INTENT_VALUE_ICC_ABSENT));
         verify(mSubscriptionController, times(1)).notifySubscriptionInfoChanged();
-        ArgumentCaptor<ContentValues> valueCapture = ArgumentCaptor.forClass(ContentValues.class);
-        verify(mContentProvider).update(any(), valueCapture.capture(),
-                eq(UNIQUE_KEY_SUBSCRIPTION_ID + " IN (" + FAKE_SUB_ID_1 + ")"), any());
-        boolean uiccApplicationsEnabled = valueCapture.getValue()
-                .getAsBoolean(SubscriptionManager.UICC_APPLICATIONS_ENABLED);
-        assertTrue(uiccApplicationsEnabled);
     }
 
     @Test
@@ -211,8 +205,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
                 .getSubInfoUsingSlotIndexPrivileged(eq(FAKE_SUB_ID_1));
         doReturn(new int[]{FAKE_SUB_ID_1}).when(mSubscriptionController)
                 .getActiveSubIdList(/*visibleOnly*/false);
-        mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_ABSENT, null, FAKE_SUB_ID_1, true);
+        mUpdater.updateInternalIccStateForInactiveSlot(FAKE_SUB_ID_1, null);
 
         processAllMessages();
         assertTrue(mUpdater.isSubInfoInitialized());
@@ -232,7 +225,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
     @SmallTest
     public void testSimUnknown() throws Exception {
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_UNKNOWN, null, FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_UNKNOWN, null, FAKE_SUB_ID_1);
 
         processAllMessages();
         assertFalse(mUpdater.isSubInfoInitialized());
@@ -249,7 +242,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
     @SmallTest
     public void testSimNotReady() throws Exception {
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_NOT_READY, null, FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_NOT_READY, null, FAKE_SUB_ID_1);
 
         processAllMessages();
         assertFalse(mUpdater.isSubInfoInitialized());
@@ -269,7 +262,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
         doReturn(true).when(mIccCard).isEmptyProfile();
 
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_NOT_READY, null, FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_NOT_READY, null, FAKE_SUB_ID_1);
 
         processAllMessages();
         assertTrue(mUpdater.isSubInfoInitialized());
@@ -287,9 +280,47 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
 
     @Test
     @SmallTest
+    public void testSimNotReadyDisabledUiccApps() throws Exception {
+        String iccId = "123456";
+        doReturn(mIccCard).when(mPhone).getIccCard();
+        doReturn(false).when(mIccCard).isEmptyProfile();
+        doReturn(iccId).when(mUiccSlot).getIccId();
+        doReturn(mSubInfo).when(mSubscriptionController).getSubInfoForIccId(iccId);
+        doReturn(false).when(mSubInfo).areUiccApplicationsEnabled();
+
+        mUpdater.updateInternalIccState(
+                IccCardConstants.INTENT_VALUE_ICC_NOT_READY, null, FAKE_SUB_ID_1);
+
+        processAllMessages();
+        assertTrue(mUpdater.isSubInfoInitialized());
+        // Sub info should be cleared and change should be notified.
+        verify(mSubscriptionController).clearSubInfoRecord(eq(FAKE_SUB_ID_1));
+        verify(mSubscriptionController).notifySubscriptionInfoChanged();
+        // No new sub should be added.
+        verify(mSubscriptionManager, never()).addSubscriptionInfoRecord(any(), anyInt());
+        verify(mSubscriptionContent, never()).put(anyString(), any());
+        CarrierConfigManager mConfigManager = (CarrierConfigManager)
+                mContext.getSystemService(Context.CARRIER_CONFIG_SERVICE);
+        verify(mConfigManager).updateConfigForPhoneId(eq(FAKE_SUB_ID_1),
+                eq(IccCardConstants.INTENT_VALUE_ICC_NOT_READY));
+
+        // When becomes ABSENT, UICC_APPLICATIONS_ENABLED should be reset to true.
+        mUpdater.updateInternalIccState(
+                IccCardConstants.INTENT_VALUE_ICC_ABSENT, null, FAKE_SUB_ID_1);
+        processAllMessages();
+        ArgumentCaptor<ContentValues> valueCapture = ArgumentCaptor.forClass(ContentValues.class);
+        verify(mContentProvider).update(eq(SubscriptionManager.CONTENT_URI), valueCapture.capture(),
+                eq(SubscriptionManager.ICC_ID + "=\'" + iccId + "\'"), eq(null));
+        ContentValues contentValues = valueCapture.getValue();
+        assertTrue(contentValues != null && contentValues.getAsBoolean(
+                UICC_APPLICATIONS_ENABLED));
+    }
+
+    @Test
+    @SmallTest
     public void testSimError() throws Exception {
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_CARD_IO_ERROR, null, FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_CARD_IO_ERROR, null, FAKE_SUB_ID_1);
 
         processAllMessages();
         assertTrue(mUpdater.isSubInfoInitialized());
@@ -306,7 +337,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
     @SmallTest
     public void testWrongSimState() throws Exception {
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_IMSI, null, 2, false);
+                IccCardConstants.INTENT_VALUE_ICC_IMSI, null, 2);
 
         processAllMessages();
         assertFalse(mUpdater.isSubInfoInitialized());
@@ -331,7 +362,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
                 true);
 
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_LOADED, null, FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_LOADED, null, FAKE_SUB_ID_1);
 
         processAllMessages();
         assertTrue(mUpdater.isSubInfoInitialized());
@@ -398,7 +429,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
         doReturn(Arrays.asList(mSubInfo)).when(mSubscriptionController)
                 .getSubInfoUsingSlotIndexPrivileged(eq(FAKE_SUB_ID_1));
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_LOADED, null, FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_LOADED, null, FAKE_SUB_ID_1);
 
         processAllMessages();
         assertTrue(mUpdater.isSubInfoInitialized());
@@ -425,7 +456,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
         doReturn(Arrays.asList(mSubInfo)).when(mSubscriptionController)
                 .getSubInfoUsingSlotIndexPrivileged(eq(FAKE_SUB_ID_1));
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_LOCKED, "TESTING", FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_LOCKED, "TESTING", FAKE_SUB_ID_1);
 
         processAllMessages();
         assertTrue(mUpdater.isSubInfoInitialized());
@@ -485,7 +516,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
         doReturn(Arrays.asList(mSubInfo)).when(mSubscriptionController)
                 .getSubInfoUsingSlotIndexPrivileged(eq(FAKE_SUB_ID_1));
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_LOADED, null, FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_LOADED, null, FAKE_SUB_ID_1);
 
         processAllMessages();
         verify(mSubscriptionManager, times(1)).addSubscriptionInfoRecord(anyString(), anyInt());
@@ -500,7 +531,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
         doReturn("89012604200000000001").when(mIccRecord).getFullIccId();
 
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_LOADED, null, FAKE_SUB_ID_2, false);
+                IccCardConstants.INTENT_VALUE_ICC_LOADED, null, FAKE_SUB_ID_2);
 
         processAllMessages();
         verify(mSubscriptionManager, times(1)).addSubscriptionInfoRecord(eq("89012604200000000000"),
@@ -516,13 +547,14 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
     @Test
     @SmallTest
     public void testSimLockWithIccId() throws Exception {
-        /* no need for IccId query */
+        // ICCID will be queried even if it is already available
+        doReturn("98106240020000000000").when(mIccRecord).getFullIccId();
 
         replaceInstance(SubscriptionInfoUpdater.class, "sIccId", null,
                 new String[]{"89012604200000000000"});
 
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_LOCKED, "TESTING", FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_LOCKED, "TESTING", FAKE_SUB_ID_1);
 
         processAllMessages();
         assertTrue(mUpdater.isSubInfoInitialized());
@@ -672,7 +704,7 @@ public class SubscriptionInfoUpdaterTest extends TelephonyTest {
 
         // Mock sending a sim loaded for SIM 1
         mUpdater.updateInternalIccState(
-                IccCardConstants.INTENT_VALUE_ICC_LOADED, "TESTING", FAKE_SUB_ID_1, false);
+                IccCardConstants.INTENT_VALUE_ICC_LOADED, "TESTING", FAKE_SUB_ID_1);
 
         processAllMessages();
 
