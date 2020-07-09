@@ -99,9 +99,11 @@ import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -406,6 +408,8 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
     private final RegistrantList mOtaspRegistrants = new RegistrantList();
 
+    private final RegistrantList mPreferredNetworkTypeRegistrants = new RegistrantList();
+
     protected Registrant mPostDialHandler;
 
     protected final LocalLog mLocalLog;
@@ -426,7 +430,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     protected SimulatedRadioControl mSimulatedRadioControl;
 
     private boolean mUnitTestMode;
-
+    private Map<Integer, Long> mAllowedNetworkTypesForReasons = new HashMap<>();
     private final CarrierPrivilegesTracker mCarrierPrivilegesTracker;
 
     protected VoiceCallSessionStats mVoiceCallSessionStats;
@@ -1736,6 +1740,23 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         }
     }
 
+    private @TelephonyManager.NetworkTypeBitMask long getAllowedNetworkTypes() {
+        long allowedNetworkTypes = TelephonyManager.getAllNetworkTypesBitmask();
+        if (SubscriptionController.getInstance() != null) {
+            String result = SubscriptionController.getInstance().getSubscriptionProperty(
+                    getSubId(),
+                    SubscriptionManager.ALLOWED_NETWORK_TYPES);
+
+            if (result != null) {
+                try {
+                    allowedNetworkTypes = Long.parseLong(result);
+                } catch (NumberFormatException err) {
+                    Rlog.e(LOG_TAG, "allowedNetworkTypes NumberFormat exception");
+                }
+            }
+        }
+        return allowedNetworkTypes;
+    }
     /**
      * Set the properties by matching the carrier string in
      * a string-array resource
@@ -2053,6 +2074,16 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         editor.apply();
     }
 
+    private @TelephonyManager.NetworkTypeBitMask long getAllowedNetworkTypesForAllReasons() {
+        long allowedNetworkTypes = TelephonyManager.getAllNetworkTypesBitmask();
+        synchronized (mAllowedNetworkTypesForReasons) {
+            for (long networkTypes: mAllowedNetworkTypesForReasons.values()) {
+                allowedNetworkTypes = allowedNetworkTypes & networkTypes;
+            }
+        }
+        return allowedNetworkTypes;
+    }
+
     public void setVoiceCallForwardingFlag(int line, boolean enable, String number) {
         setCallForwardingIndicatorInSharedPref(enable);
         IccRecords r = getIccRecords();
@@ -2192,6 +2223,55 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     }
 
     /**
+     * Get the effective allowed network types on the device.
+     * @return effective network type
+     */
+    public @TelephonyManager.NetworkTypeBitMask long getEffectiveAllowedNetworkTypes() {
+        long allowedNetworkTypes = getAllowedNetworkTypes();
+        return allowedNetworkTypes & getAllowedNetworkTypesForAllReasons();
+    }
+
+    /**
+     * Get the allowed network types for a certain reason.
+     * @param reason reason to configure allowed network types
+     * @return the allowed network types.
+     */
+    public @TelephonyManager.NetworkTypeBitMask long getAllowedNetworkTypes(
+            @TelephonyManager.AllowedNetworkTypesReason int reason) {
+        synchronized (mAllowedNetworkTypesForReasons) {
+            switch (reason) {
+                case TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_POWER:
+                    return mAllowedNetworkTypesForReasons.getOrDefault(
+                            TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_POWER,
+                            TelephonyManager.getAllNetworkTypesBitmask());
+                default:
+                    Rlog.e(LOG_TAG, "Invalid allowed network type reason: " + reason);
+                    return TelephonyManager.getAllNetworkTypesBitmask();
+            }
+        }
+    }
+
+    /**
+     * Requests to set the allowed network types for a specific reason
+     * @param reason reason to configure allowed network type
+     * @param networkTypes one of the network types
+     */
+    public void setAllowedNetworkTypes(@TelephonyManager.AllowedNetworkTypesReason int reason,
+            @TelephonyManager.NetworkTypeBitMask long networkTypes) {
+        synchronized (mAllowedNetworkTypesForReasons) {
+            switch (reason) {
+                case TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_POWER:
+                    mAllowedNetworkTypesForReasons.put(
+                            TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_POWER, networkTypes);
+                    break;
+                default:
+                    Rlog.e(LOG_TAG, "Invalid allowed network type reason: " + reason);
+                    break;
+            }
+        }
+    }
+
+    /**
      *  Requests to set the preferred network type for searching and registering
      * (CS/PS domain, RAT, and operation mode)
      * @param networkType one of  NT_*_TYPE
@@ -2203,21 +2283,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         int modemRaf = getRadioAccessFamily();
         int rafFromType = RadioAccessFamily.getRafFromNetworkType(networkType);
 
-        long allowedNetworkTypes = -1;
-        if (SubscriptionController.getInstance() != null) {
-            String result = SubscriptionController.getInstance().getSubscriptionProperty(
-                    getSubId(),
-                    SubscriptionManager.ALLOWED_NETWORK_TYPES);
-
-            if (result != null) {
-                try {
-                    allowedNetworkTypes = Long.parseLong(result);
-                } catch (NumberFormatException err) {
-                    Rlog.d(LOG_TAG, "allowedNetworkTypes NumberFormat exception");
-                }
-            }
-        }
-
+        long allowedNetworkTypes = getAllowedNetworkTypes();
         if (modemRaf == RadioAccessFamily.RAF_UNKNOWN
                 || rafFromType == RadioAccessFamily.RAF_UNKNOWN) {
             Rlog.d(LOG_TAG, "setPreferredNetworkType: Abort, unknown RAF: "
@@ -2232,16 +2298,20 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
             return;
         }
 
-        int filteredRaf = (int) (rafFromType & modemRaf & allowedNetworkTypes);
+        int filteredRaf = (int) (rafFromType & modemRaf & allowedNetworkTypes
+                & getAllowedNetworkTypesForAllReasons());
         int filteredType = RadioAccessFamily.getNetworkTypeFromRaf(filteredRaf);
-
+        long powerAllowedNetworkTypes = getAllowedNetworkTypes(
+                TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_POWER);
         Rlog.d(LOG_TAG, "setPreferredNetworkType: networkType = " + networkType
                 + " modemRaf = " + modemRaf
                 + " rafFromType = " + rafFromType
                 + " allowedNetworkTypes = " + allowedNetworkTypes
+                + " power allowedNetworkTypes = " + powerAllowedNetworkTypes
                 + " filteredType = " + filteredType);
 
         mCi.setPreferredNetworkType(filteredType, response);
+        mPreferredNetworkTypeRegistrants.notifyRegistrants();
     }
 
     /**
@@ -2251,6 +2321,27 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      */
     public void getPreferredNetworkType(Message response) {
         mCi.getPreferredNetworkType(response);
+    }
+
+    /**
+     * Register for preferred network type changes
+     *
+     * @param h Handler that receives the notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    public void registerForPreferredNetworkTypeChanged(Handler h, int what, Object obj) {
+        checkCorrectThread(h);
+        mPreferredNetworkTypeRegistrants.addUnique(h, what, obj);
+    }
+
+    /**
+     * Unregister for preferred network type changes.
+     *
+     * @param h Handler that should be unregistered.
+     */
+    public void unregisterForPreferredNetworkTypeChanged(Handler h) {
+        mPreferredNetworkTypeRegistrants.remove(h);
     }
 
     /**

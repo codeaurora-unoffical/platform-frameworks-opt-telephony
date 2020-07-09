@@ -900,8 +900,9 @@ public abstract class InboundSmsHandler extends StateMachine {
                     // earlier segments. In that case, the broadcast will be sent as soon as all
                     // segments are in the table, and any later EVENT_BROADCAST_SMS messages will
                     // get a row count of 0 and return.
-                    log("processMessagePart: returning false, as not all parts of the message"
-                            + " have arrived", tracker.getMessageId());
+                    log("processMessagePart: returning false. Only " + cursorCount + " of "
+                            + messageCount + " segments " + " have arrived. refNumber: "
+                            + refNumber, tracker.getMessageId());
                     return false;
                 }
 
@@ -957,6 +958,8 @@ public abstract class InboundSmsHandler extends StateMachine {
                                         .get(DISPLAY_ADDRESS_COLUMN)), null);
                     }
                 }
+                log("processMessagePart: all " + messageCount + " segments "
+                        + " received. refNumber: " + refNumber, tracker.getMessageId());
             } catch (SQLException e) {
                 loge("processMessagePart: Can't access multipart SMS database, id: "
                         + tracker.getMessageId(), e);
@@ -1109,7 +1112,7 @@ public abstract class InboundSmsHandler extends StateMachine {
             mContext,
             0,
             new Intent(ACTION_OPEN_SMS_APP),
-            PendingIntent.FLAG_ONE_SHOT);
+                PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder mBuilder = new Notification.Builder(mContext)
                 .setSmallIcon(com.android.internal.R.drawable.sym_action_chat)
                 .setAutoCancel(true)

@@ -259,12 +259,6 @@ public class UiccProfile extends IccCard {
         mLock = lock;
         mUiccCard = uiccCard;
         mPhoneId = phoneId;
-        // set current app type based on phone type - do this before calling update() as that
-        // calls updateIccAvailability() which uses mCurrentAppType
-        Phone phone = PhoneFactory.getPhone(phoneId);
-        if (phone != null) {
-            setCurrentAppType(phone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM);
-        }
 
         if (mUiccCard instanceof EuiccCard) {
             // for RadioConfig<1.2 eid is not known when the EuiccCard is constructed
@@ -273,7 +267,14 @@ public class UiccProfile extends IccCard {
 
         update(c, ci, ics);
         ci.registerForOffOrNotAvailable(mHandler, EVENT_RADIO_OFF_OR_UNAVAILABLE, null);
+
+        Phone phone = PhoneFactory.getPhone(phoneId);
+        if (phone != null) {
+            setCurrentAppType(phone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM);
+        }
+
         resetProperties();
+        updateIccAvailability(false);
 
         IntentFilter intentfilter = new IntentFilter();
         intentfilter.addAction(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
@@ -342,20 +343,21 @@ public class UiccProfile extends IccCard {
     }
 
     private void setCurrentAppType(boolean isGsm) {
-        if (VDBG) log("setCurrentAppType");
         synchronized (mLock) {
             if (isGsm) {
                 mCurrentAppType = UiccController.APP_FAM_3GPP;
             } else {
                 //if CSIM application is not present, set current app to default app i.e 3GPP
-                UiccCardApplication newApp = getApplication(UiccController.APP_FAM_3GPP2);
-                if(newApp != null) {
+                UiccCardApplication newApp = null;
+                newApp = getApplication(UiccController.APP_FAM_3GPP2);
+                if (newApp != null) {
                     mCurrentAppType = UiccController.APP_FAM_3GPP2;
                 } else {
                     mCurrentAppType = UiccController.APP_FAM_3GPP;
                 }
             }
         }
+        log("setCurrentAppType to be " + mCurrentAppType);
     }
 
     /**
@@ -1644,6 +1646,21 @@ public class UiccProfile extends IccCard {
     }
 
     /**
+     * Make sure the iccid in SIM record matches the current active subId. If not, return false.
+     * When SIM switching in eSIM is happening, there are rare cases that setOperatorBrandOverride
+     * is called on old subId while new iccid is already loaded on SIM record. For those cases
+     * setOperatorBrandOverride would apply to the wrong (new) iccid. This check is to avoid it.
+     */
+    private boolean checkSubIdAndIccIdMatch(String iccid) {
+        if (TextUtils.isEmpty(iccid)) return false;
+        SubscriptionInfo subInfo = SubscriptionController.getInstance()
+                .getActiveSubscriptionInfoForSimSlotIndex(
+                        getPhoneId(), mContext.getOpPackageName(), null);
+        return subInfo != null && IccUtils.stripTrailingFs(subInfo.getIccId()).equals(
+                IccUtils.stripTrailingFs(iccid));
+    }
+
+    /**
      * Sets the overridden operator brand.
      */
     public boolean setOperatorBrandOverride(String brand) {
@@ -1652,6 +1669,10 @@ public class UiccProfile extends IccCard {
 
         String iccId = getIccId();
         if (TextUtils.isEmpty(iccId)) {
+            return false;
+        }
+        if (!checkSubIdAndIccIdMatch(iccId)) {
+            loge("iccId doesn't match current active subId.");
             return false;
         }
 
