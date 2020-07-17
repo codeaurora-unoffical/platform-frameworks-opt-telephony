@@ -1255,6 +1255,10 @@ public class SIMRecords extends IccRecords {
         }
 
         public void onRecordLoaded(AsyncResult ar) {
+            if (ar.exception != null) {
+                loge("Record Load Exception: " + ar.exception);
+                return;
+            }
             mEfPl = (byte[]) ar.result;
             if (DBG) log("EF_PL=" + IccUtils.bytesToHexString(mEfPl));
         }
@@ -1266,6 +1270,10 @@ public class SIMRecords extends IccRecords {
         }
 
         public void onRecordLoaded(AsyncResult ar) {
+            if (ar.exception != null) {
+                loge("Record Load Exception: " + ar.exception);
+                return;
+            }
             mEfLi = (byte[]) ar.result;
             if (DBG) log("EF_LI=" + IccUtils.bytesToHexString(mEfLi));
         }
@@ -1297,6 +1305,7 @@ public class SIMRecords extends IccRecords {
                 break;
             case EF_MSISDN:
                 mRecordsToLoad++;
+                mEssentialRecordsToLoad++;
                 log("SIM Refresh called for EF_MSISDN");
                 new AdnRecordLoader(mFh).loadFromEF(EF_MSISDN, getExtFromEf(EF_MSISDN), 1,
                         obtainMessage(EVENT_GET_MSISDN_DONE));
@@ -1509,6 +1518,9 @@ public class SIMRecords extends IccRecords {
 
     private void onLocked(int msg) {
         if (DBG) log("only fetch EF_LI, EF_PL and EF_ICCID in locked state");
+        mRecordsRequested = false;
+        mLoaded.set(false);
+
         mLockedRecordsReqReason = msg == EVENT_APP_LOCKED ? LOCKED_RECORDS_REQ_REASON_LOCKED :
                 LOCKED_RECORDS_REQ_REASON_NETWORK_LOCKED;
 
