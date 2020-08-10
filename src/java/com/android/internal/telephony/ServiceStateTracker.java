@@ -220,6 +220,7 @@ public class ServiceStateTracker extends Handler {
     private RegistrantList mPsRestrictDisabledRegistrants = new RegistrantList();
     private RegistrantList mImsCapabilityChangedRegistrants = new RegistrantList();
     private RegistrantList mNrStateChangedRegistrants = new RegistrantList();
+    private RegistrantList mNrFrequencyChangedRegistrants = new RegistrantList();
 
     /* Radio power off pending flag and tag counter */
     private boolean mPendingRadioPowerOffAfterDataOff = false;
@@ -1562,8 +1563,11 @@ public class ServiceStateTracker extends Handler {
                     }
                     mPhone.notifyPhysicalChannelConfiguration(list);
                     mLastPhysicalChannelConfigList = list;
-                    boolean hasChanged =
-                            updateNrFrequencyRangeFromPhysicalChannelConfigs(list, mSS);
+                    boolean hasChanged = false;
+                    if (updateNrFrequencyRangeFromPhysicalChannelConfigs(list, mSS)) {
+                        mNrFrequencyChangedRegistrants.notifyRegistrants();
+                        hasChanged = true;
+                    }
                     if (updateNrStateFromPhysicalChannelConfigs(list, mSS)) {
                         mNrStateChangedRegistrants.notifyRegistrants();
                         hasChanged = true;
@@ -4933,16 +4937,19 @@ public class ServiceStateTracker extends Handler {
 
         List<SubscriptionInfo> subInfoList = SubscriptionController.getInstance()
                 .getActiveSubscriptionInfoList(mPhone.getContext().getOpPackageName());
-        for (SubscriptionInfo info : subInfoList) {
-            // If we have an active opportunistic subscription whose data is IN_SERVICE, we needs
-            // to get signal strength to decide data switching threshold. In this case, we poll
-            // latest signal strength from modem.
-            if (info.isOpportunistic()) {
-                TelephonyManager tm = TelephonyManager.from(mPhone.getContext())
-                        .createForSubscriptionId(info.getSubscriptionId());
-                ServiceState ss = tm.getServiceState();
-                if (ss != null && ss.getDataRegState() == ServiceState.STATE_IN_SERVICE) {
-                    return true;
+        if (!ArrayUtils.isEmpty(subInfoList)) {
+            for (SubscriptionInfo info : subInfoList) {
+                // If we have an active opportunistic subscription whose data is IN_SERVICE,
+                // we need to get signal strength to decide data switching threshold. In this case,
+                // we poll latest signal strength from modem.
+                if (info.isOpportunistic()) {
+                    TelephonyManager tm = TelephonyManager.from(mPhone.getContext())
+                            .createForSubscriptionId(info.getSubscriptionId());
+                    ServiceState ss = tm.getServiceState();
+                    if (ss != null
+                            && ss.getDataRegState() == ServiceState.STATE_IN_SERVICE) {
+                        return true;
+                    }
                 }
             }
         }
@@ -5605,6 +5612,25 @@ public class ServiceStateTracker extends Handler {
     }
 
     /**
+     * Registers for 5G NR frequency changed.
+     * @param h handler to notify
+     * @param what what code of message when delivered
+     * @param obj placed in Message.obj
+     */
+    public void registerForNrFrequencyChanged(Handler h, int what, Object obj) {
+        Registrant r = new Registrant(h, what, obj);
+        mNrFrequencyChangedRegistrants.add(r);
+    }
+
+    /**
+     * Unregisters for 5G NR frequency changed.
+     * @param h handler to notify
+     */
+    public void unregisterForNrFrequencyChanged(Handler h) {
+        mNrFrequencyChangedRegistrants.remove(h);
+    }
+
+    /**
      * Get the NR data connection context ids.
      *
      * @return data connection context ids.
@@ -5613,10 +5639,12 @@ public class ServiceStateTracker extends Handler {
     public Set<Integer> getNrContextIds() {
         Set<Integer> idSet = new HashSet<>();
 
-        for (PhysicalChannelConfig config : mLastPhysicalChannelConfigList) {
-            if (isNrPhysicalChannelConfig(config)) {
-                for (int id : config.getContextIds()) {
-                    idSet.add(id);
+        if (!ArrayUtils.isEmpty(mLastPhysicalChannelConfigList)) {
+            for (PhysicalChannelConfig config : mLastPhysicalChannelConfigList) {
+                if (isNrPhysicalChannelConfig(config)) {
+                    for (int id : config.getContextIds()) {
+                        idSet.add(id);
+                    }
                 }
             }
         }
